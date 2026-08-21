@@ -15,7 +15,18 @@ Open the Supabase project SQL Editor and run:
 -- supabase/migrations/20260821_social_chat_and_free_ai.sql
 ```
 
-The migration enables the required social/chat policies and creates the server-authoritative `FREE_AI_CREDITS` table. Each authenticated user receives five credits that reset every 48 hours. `consume_free_ai_credit()` locks and deducts one credit atomically, so browser-side changes cannot grant more credits.
+The migration enables the required social/chat policies and creates the server-authoritative `FREE_AI_CREDITS` table. Each authenticated user receives five **Free AI tokens** that reset every 48 hours.
+
+### Required token-RPC repair
+
+Because the earlier credit RPC can produce the current token-sync error, immediately run this second SQL file in the same SQL Editor after the first migration:
+
+```sql
+-- Paste the full contents of:
+-- supabase/migrations/20260821_free_ai_token_rpc_repair.sql
+```
+
+This repair adds `consume_free_ai_token()` and `get_free_ai_tokens()` with unambiguous column aliases. It preserves every existing user balance while letting the application correctly show the balance as tokens.
 
 ## 3. Deploy the Edge Function
 
@@ -31,7 +42,7 @@ Keep JWT verification enabled. Add this secret through Supabase’s Edge Functio
 GROQ_API_KEY=<the newly rotated Groq key>
 ```
 
-The Supabase runtime provides `SUPABASE_URL` and `SUPABASE_ANON_KEY` to the function. The function accepts requests only from `https://retrostudioencoderdev.oneapp.dev`, verifies the caller’s Supabase session, allows only Auto, Fast, and Plan modes, deducts one server-side credit, and calls `openai/gpt-oss-20b` with capped output and a deliberate short delay.
+The Supabase runtime provides `SUPABASE_URL` and `SUPABASE_ANON_KEY` to the function. The function accepts requests only from `https://retrostudioencoderdev.oneapp.dev`, verifies the caller’s Supabase session, allows only Auto, Fast, and Plan modes, deducts one server-side token, and calls `openai/gpt-oss-20b` with capped output and a deliberate short delay.
 
 ## 4. Publish the updated HTML
 
@@ -39,12 +50,12 @@ Copy the latest `retrostudio.html` from GitHub into the publisher and publish it
 
 ## 5. Verify as a real user
 
-Sign in on the published site. Confirm that the following all work:
+Sign in on the published site. Confirm that the following all work after applying **both** SQL files and deploying the latest function:
 
 1. Search for another user and send a friend request.
 2. Accept a request from the receiving account.
 3. Open a chat and send a message.
-4. Choose Free AI, send one Fast or Auto request, and confirm the balance falls from 5 to 4.
+4. Choose Free AI, send one Fast or Auto request, and confirm the Free AI token balance falls from 5 to 4.
 5. Confirm Think, Long, and Coder remain locked across every provider.
 6. Confirm no dashboard or social surface displays an email address.
 

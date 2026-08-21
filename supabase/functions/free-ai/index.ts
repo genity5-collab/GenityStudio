@@ -61,12 +61,13 @@ Deno.serve(async (request) => {
   }
 
   // The RPC uses the authenticated caller's JWT. It locks the row and deducts
-  // exactly one credit from a five-credit, forty-eight-hour allocation. A short
+  // exactly one token from a five-token, forty-eight-hour allocation. A short
   // retry covers the brief schema-cache delay that can follow a fresh deployment.
-  let creditRows: unknown = null;
+  type TokenRow = { tokens_remaining?: number; reset_at?: string | null };
+  let creditRows: TokenRow | TokenRow[] | null = null;
   let creditError: { message?: string } | null = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const result = await userClient.rpc("consume_free_ai_credit");
+    const result = await userClient.rpc("consume_free_ai_token");
     creditRows = result.data;
     creditError = result.error;
     if (!creditError) break;
@@ -75,11 +76,11 @@ Deno.serve(async (request) => {
   if (creditError) {
     const message = creditError.message || "";
     const exhausted = /exhausted/i.test(message);
-    console.error("Free AI credit RPC failed", { message, userId: userData.user.id });
+    console.error("Free AI token RPC failed", { message, userId: userData.user.id });
     return json({
       error: exhausted
-        ? "Free AI credits are exhausted"
-        : "Free AI credit setup is still syncing. Please wait a minute and try again.",
+        ? "Free AI tokens are exhausted"
+        : "Free AI tokens are being prepared. Please try again in a moment.",
     }, exhausted ? 429 : 503);
   }
   const credit = Array.isArray(creditRows) ? creditRows[0] : creditRows;
@@ -111,7 +112,7 @@ Deno.serve(async (request) => {
       }),
     });
   } catch {
-    return json({ error: "Free AI provider is unavailable; one credit was used for this request" }, 503);
+    return json({ error: "Free AI provider is unavailable; one token was used for this request" }, 503);
   }
 
   let groqBody: any;
@@ -122,7 +123,7 @@ Deno.serve(async (request) => {
   }
   if (!groqResponse.ok) {
     console.warn("Groq request failed", { status: groqResponse.status, userId: userData.user.id });
-    return json({ error: "Free AI provider is unavailable; one credit was used for this request" }, 502);
+    return json({ error: "Free AI provider is unavailable; one token was used for this request" }, 502);
   }
 
   const content = groqBody?.choices?.[0]?.message?.content;
@@ -132,7 +133,7 @@ Deno.serve(async (request) => {
 
   return json({
     content,
-    credits_remaining: Number(credit?.credits_remaining ?? 0),
+    tokens_remaining: Number(credit?.tokens_remaining ?? 0),
     reset_at: credit?.reset_at ?? null,
     model: GROQ_MODEL,
   });

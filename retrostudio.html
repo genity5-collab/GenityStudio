@@ -2056,6 +2056,27 @@ textarea.sm {
 
 .live-content { color:var(--tx); font-size:.78rem; line-height:1.55; }
 .live-summary { color:var(--mu); }
+
+/* Unified AI motion system — used by every available AI mode. */
+.live-bubble { position:relative; overflow:hidden; box-shadow:0 10px 32px rgba(0,0,0,.16); }
+.live-bubble::after { content:""; position:absolute; inset:0; pointer-events:none; opacity:.55; background:linear-gradient(120deg,transparent 12%,rgba(122,162,255,.08) 38%,transparent 62%); transform:translateX(-115%); animation:aiSheen 3.2s ease-in-out infinite; }
+.thinking-stage { display:grid; grid-template-columns:50px 1fr; gap:10px; align-items:center; padding:9px 10px; margin:0 0 9px; border:1px solid rgba(110,147,255,.22); border-radius:10px; background:linear-gradient(135deg,rgba(91,140,255,.12),rgba(168,85,247,.055)); }
+.thinking-visual { position:relative; width:48px; height:42px; isolation:isolate; }
+.stage-orbit { position:absolute; inset:5px; border:1px solid rgba(130,177,255,.58); border-radius:50%; animation:aiOrbit 2.8s linear infinite; }
+.stage-orbit.o2 { inset:11px -1px; border-style:dashed; border-color:rgba(191,118,255,.62); animation-duration:2s; animation-direction:reverse; }
+.stage-core { position:absolute; left:18px; top:15px; width:14px; height:14px; border-radius:5px; transform:rotate(45deg); background:linear-gradient(135deg,#75d4ff,#7569ff); box-shadow:0 0 0 4px rgba(91,140,255,.12),0 0 16px rgba(105,141,255,.9); animation:aiCore 1.4s ease-in-out infinite; }
+.stage-node { position:absolute; width:5px; height:5px; border-radius:50%; background:#9ae6ff; box-shadow:0 0 9px #9ae6ff; animation:aiNode 1.8s ease-in-out infinite; }
+.stage-node.n1 { left:3px; top:8px; animation-delay:.1s; }.stage-node.n2 { right:2px; top:18px; animation-delay:.55s; }.stage-node.n3 { left:11px; bottom:1px; animation-delay:1s; }
+.thinking-copy { min-width:0; }.thinking-copy strong { display:block; color:var(--tx); font-size:.7rem; letter-spacing:.01em; }.thinking-copy span { display:block; color:var(--mu); font-size:.61rem; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.live-bubble[data-stage="write"] .stage-core { background:linear-gradient(135deg,#55ecbf,#2ea8ff); }.live-bubble[data-stage="encode"] .stage-core { background:linear-gradient(135deg,#ffd36a,#a855f7); animation-duration:.72s; }.live-bubble[data-stage="complete"] .stage-core { background:linear-gradient(135deg,#4ade80,#22c55e); animation:none; }
+.execution-card { overflow:hidden; transition:transform .28s ease,border-color .28s ease,box-shadow .28s ease; }.execution-card:hover { transform:translateY(-1px); border-color:rgba(126,165,255,.42); box-shadow:0 8px 20px rgba(0,0,0,.16); }
+.exec-step { position:relative; transition:background .26s ease,color .26s ease,transform .26s ease; }.exec-step.active { box-shadow:inset 0 -2px 0 var(--ac); }.exec-step.active::after { content:""; position:absolute; left:8px; right:8px; bottom:0; height:2px; background:linear-gradient(90deg,transparent,#82c7ff,transparent); animation:stepSweep 1.25s linear infinite; }
+.edit-status { transition:color .22s ease,transform .22s ease; }.edit-status.pending { animation:statusLift 1.25s ease-in-out infinite; }.enc-card { animation:resultRise .34s cubic-bezier(.2,.8,.2,1) both; }.enc-btn.primary { position:relative; overflow:hidden; }.enc-btn.primary::after { content:""; position:absolute; inset:0; background:linear-gradient(110deg,transparent 28%,rgba(255,255,255,.33) 48%,transparent 68%); transform:translateX(-120%); animation:buttonSheen 2.8s ease-in-out infinite; }
+#aiSend.loading { min-width:102px; background:linear-gradient(110deg,#5b8cff,#8b5cf6,#5b8cff); background-size:200% 100%; animation:sendShift 1.1s linear infinite; }
+#freeCreditsBar { border-color:rgba(91,140,255,.28); background:linear-gradient(90deg,rgba(91,140,255,.06),rgba(168,85,247,.04)); }
+@keyframes aiSheen { 0%,25% { transform:translateX(-115%); } 70%,100% { transform:translateX(115%); } }
+@keyframes aiOrbit { to { transform:rotate(360deg); } } @keyframes aiCore { 50% { transform:rotate(225deg) scale(1.18); box-shadow:0 0 0 7px rgba(91,140,255,.06),0 0 22px rgba(105,141,255,.95); } } @keyframes aiNode { 50% { opacity:.25; transform:scale(.55); } } @keyframes stepSweep { to { transform:translateX(110%); } } @keyframes statusLift { 50% { transform:translateX(2px); opacity:.72; } } @keyframes resultRise { from { opacity:0; transform:translateY(10px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } } @keyframes buttonSheen { 0%,58% { transform:translateX(-120%); } 100% { transform:translateX(120%); } } @keyframes sendShift { to { background-position:200% 0; } }
+@media (prefers-reduced-motion:reduce){ .live-bubble::after,.stage-orbit,.stage-core,.stage-node,.exec-step.active::after,.edit-status.pending,.enc-card,.enc-btn.primary::after,#aiSend.loading { animation:none !important; } }
 .enc-card { border-color:rgba(91,140,255,.7); background:linear-gradient(135deg,var(--card2),rgba(91,140,255,.09)); }
 .enc-badge { background:linear-gradient(135deg,#5b8cff,#8b5cf6); color:#fff; }
 .enc-summary { display:flex; align-items:center; gap:7px; color:var(--mu); font-size:.66rem; margin:7px 0 8px; }
@@ -2171,7 +2192,7 @@ We found your existing local account. After login, your data will be migrated au
   </div>
 </div>
 <div class="resource-hud" aria-label="Usage balance">
-  <button class="currency-chip" id="freeCreditChip" type="button" title="Open Free AI settings"><span class="currency-icon">✦</span><span class="currency-copy"><strong id="freeHudValue">5</strong><span>Free AI credits</span></span></button>
+  <button class="currency-chip" id="freeCreditChip" type="button" title="Open Free AI settings"><span class="currency-icon">✦</span><span class="currency-copy"><strong id="freeHudValue">5</strong><span>Free AI tokens</span></span></button>
   <button class="currency-chip coder" id="coderCreditChip" type="button" title="Open Coder mode"><span class="currency-icon">⌘</span><span class="currency-copy"><strong id="coderHudValue">10</strong><span>Coder messages</span></span></button>
 </div>
 </div>
@@ -2230,7 +2251,7 @@ We found your existing local account. After login, your data will be migrated au
 </div>
 <div id="freeKeyRow" style="display:none;margin-top:8px">
 <div class="free-credits" id="freeCreditsBar">
-<span>Free credits: <b id="freeCreditsNum">5</b>/5</span>
+<span>Free tokens: <b id="freeCreditsNum">5</b>/5</span>
 <div class="bar"><div class="bar-fill" id="freeCreditsFill" style="width:100%"></div></div>
 <span id="freeCreditsReset" style="font-size:.58rem"></span>
 </div>
@@ -2795,7 +2816,7 @@ function freeIsLockedOut(){return freeCreditsLeft()<=0;}
 function freeShouldUseFallback(){return false;}
 
 function freeTaskCost(prompt){
-  /* 1 credit per message — 5 free messages per 48 hours */
+  /* 1 token per message — 5 Free AI tokens per 48 hours */
   return 1;
 }
 
@@ -2829,15 +2850,15 @@ function getFreeApiKey(){return "";} // Shared Groq credentials are never expose
 async function refreshFreeCreditsFromServer(){
   if(!SB_USER||isLocalMode)return;
   try{
-    var r=await sb.rpc("get_free_ai_credits");
+    var r=await sb.rpc("get_free_ai_tokens");
     if(r.error)throw r.error;
     var row=Array.isArray(r.data)?r.data[0]:r.data;
     if(row){
       var resetMs=row.reset_at?new Date(row.reset_at).getTime():Date.now()+48*60*60*1000;
-      SB_FREE={credits:Math.max(0,Number(row.credits_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
+      SB_FREE={credits:Math.max(0,Number(row.tokens_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
       updateFreeCreditsBar();updateCurrencyHud();
     }
-  }catch(e){console.warn("Free AI credit sync unavailable",e.message||e);}
+  }catch(e){console.warn("Free AI token sync unavailable",e.message||e);}
 }
 async function callFreeAiServer(sys,prompt,cfg){
   var sessionResult=await sb.auth.getSession();
@@ -2850,7 +2871,7 @@ async function callFreeAiServer(sys,prompt,cfg){
   if(response.status===404)throw new Error("Free AI server is not deployed yet. Deploy the Supabase free-ai function, then try again.");
   if(!response.ok)throw new Error(data.error||"Free AI is temporarily unavailable");
   var resetMs=data.reset_at?new Date(data.reset_at).getTime():Date.now()+48*60*60*1000;
-  SB_FREE={credits:Math.max(0,Number(data.credits_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
+  SB_FREE={credits:Math.max(0,Number(data.tokens_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
   updateFreeCreditsBar();updateCurrencyHud();
   return data.content;
 }
@@ -4108,7 +4129,7 @@ function isFreeUser(){return (!$id("prov")||$id("prov").value==="free")||(SB_ACC
 function modeCfg(){
   if(aiMode==="plan")return{delay:80,tokens:1000,temp:0.5,anim:"replit",label:"📋 PLAN",fastPlan:true};
   if(aiMode==="auto")return{delay:500,tokens:8000,temp:0.4,anim:"replit",label:"⭐ AUTO"};
-  if(aiMode==="fast")return{delay:200,tokens:2000,temp:0.5,anim:null,label:"⚡ FAST"};
+  if(aiMode==="fast")return{delay:200,tokens:2000,temp:0.5,anim:"replit",label:"⚡ FAST"};
   if(aiMode==="think")return{delay:800,tokens:6000,temp:0.4,anim:"replit",label:"🧠 THINK",thinking:true};
   if(aiMode==="long")return{delay:1200,tokens:10000,temp:0.6,anim:"replit",label:"📝 LONG"};
   var c={delay:2000,tokens:12000,temp:0.3,anim:"replit",label:"✨ AUTO"};
@@ -4340,20 +4361,29 @@ async function callProviderStream(prov,key,sys,prompt,cfg,onChunk){
 function editStatusMarkup(items){
   return '<div class="edit-status-list">'+items.map(function(item){return '<div class="edit-status '+item.state+'"><span class="mark">'+(item.state==="done"?"✓":item.state==="blocked"?"✕":"◷")+'</span><span>'+escLive(item.text)+'</span></div>';}).join("")+"</div>";
 }
-function createLiveBubble(pvName){
+function createLiveBubble(pvName,modeName){
   var log=$id("aiLog");
   var row=document.createElement("div");row.className="chat-row ai";
   var av=document.createElement("div");av.className="av ai";av.style.background="transparent";av.innerHTML=provSVG(pvName);
   var bw=document.createElement("div");bw.className="bwrap";
-  var bub=document.createElement("div");bub.className="live-bubble";
+  var bub=document.createElement("div");bub.className="live-bubble";bub.dataset.stage="model";bub.dataset.mode=modeName||"auto";
   var label=document.createElement("div");label.className="think-label";label.innerHTML='<span class="think-dot"></span> Preparing '+provName(pvName)+' <span class="think-dot"></span>';
+  var stage=document.createElement("div");stage.className="thinking-stage";
+  stage.innerHTML='<div class="thinking-visual" aria-hidden="true"><i class="stage-orbit"></i><i class="stage-orbit o2"></i><i class="stage-core"></i><i class="stage-node n1"></i><i class="stage-node n2"></i><i class="stage-node n3"></i></div><div class="thinking-copy"><strong>Planning your build</strong><span>Mapping the request to supported blocks</span></div>';
   var execution=document.createElement("div");execution.className="execution-card";
-  execution.innerHTML='<div class="execution-card-head"><span>Build progress</span><span>'+provName(pvName)+'</span></div><div class="execution-steps"><div class="exec-step active" data-step="model"><b>1. Model</b>Reviewing request</div><div class="exec-step" data-step="write"><b>2. Script</b>Waiting</div><div class="exec-step" data-step="encode"><b>3. Encode</b>Waiting</div></div>';
+  execution.innerHTML='<div class="execution-card-head"><span>Build progress</span><span>'+provName(pvName)+' · '+String(modeName||"auto").toUpperCase()+'</span></div><div class="execution-steps"><div class="exec-step active" data-step="model"><b>1. Model</b>Reviewing request</div><div class="exec-step" data-step="write"><b>2. Script</b>Waiting</div><div class="exec-step" data-step="encode"><b>3. Encode</b>Waiting</div></div>';
   var ct=document.createElement("div");ct.className="live-content";ct.innerHTML='<span class="live-summary">Preparing a clear build plan…</span><span class="live-cursor"></span>';
   var editLog=document.createElement("div");editLog.className="live-edit-log";editLog.style.display="block";editLog.innerHTML=editStatusMarkup([{state:"pending",text:"Reading your request"},{state:"pending",text:"Planning supported CoolFormat blocks"},{state:"pending",text:"Waiting to encode the finished script"}]);
-  bub.appendChild(label);bub.appendChild(execution);bub.appendChild(ct);bub.appendChild(editLog);bw.appendChild(bub);row.appendChild(av);row.appendChild(bw);
+  bub.appendChild(label);bub.appendChild(stage);bub.appendChild(execution);bub.appendChild(ct);bub.appendChild(editLog);bw.appendChild(bub);row.appendChild(av);row.appendChild(bw);
   log.appendChild(row);log.scrollTop=log.scrollHeight;
-  return {row:row,bubble:bub,content:ct,label:label,execution:execution,editLog:editLog,provider:pvName};
+  return {row:row,bubble:bub,content:ct,label:label,stage:stage,execution:execution,editLog:editLog,provider:pvName};
+}
+function setLiveStage(live,state,title,detail){
+  if(!live||!live.stage)return;
+  live.bubble.dataset.stage=state;
+  var strong=live.stage.querySelector("strong"),span=live.stage.querySelector("span");
+  if(strong)strong.textContent=title;
+  if(span)span.textContent=detail;
 }
 function escLive(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function setLiveExecution(live,active,detail){
@@ -4373,17 +4403,20 @@ function updateLiveBubble(live,fullText){
   if(hasENCODE){
     live.label.innerHTML='<span class="think-dot"></span> Encoding your VisualSource <span class="think-dot"></span>';
     setLiveExecution(live,"encode","Creating direct-copy card");
+    setLiveStage(live,"encode","Encoding your import script","Compressing the finished VisualSource");
     live.content.innerHTML='<span class="live-summary">Script complete. Creating your one-click encoded copy…</span><span class="live-cursor"></span>';
     live.editLog.innerHTML=editStatusMarkup([{state:"done",text:"Request understood"},{state:"done",text:"Script generated"},{state:"pending",text:"Encoding direct-copy VisualSource"}]);
   }else if(hasLUA){
     var snippet=latestScriptSnippet(raw);
     live.label.innerHTML='<span class="think-dot"></span> Writing your Luau script <span class="think-dot"></span>';
     setLiveExecution(live,"write","Adding supported blocks");
+    setLiveStage(live,"write","Writing compatible Luau","Keeping every line ready for CoolFormat");
     live.content.innerHTML='<span class="live-summary">Latest script changes</span><pre class="code-preview">'+escLive(snippet||"Drafting supported CoolFormat code…")+'</pre><span class="live-cursor"></span>';
     live.editLog.innerHTML=editStatusMarkup([{state:"done",text:"Request understood"},{state:"pending",text:"Writing compatible Luau blocks"},{state:"pending",text:"Encoding starts after the script is complete"}]);
   }else{
     live.label.innerHTML='<span class="think-dot"></span> '+provName(live.provider)+' is planning the build <span class="think-dot"></span>';
     setLiveExecution(live,"model","Understanding the request");
+    setLiveStage(live,"model","Planning your build","Choosing a clear, supported script structure");
     live.content.innerHTML='<span class="live-summary">Reviewing the request and choosing a compatible script structure…</span><span class="live-cursor"></span>';
     live.editLog.innerHTML=editStatusMarkup([{state:"pending",text:"Reading request details"},{state:"pending",text:"Selecting supported blocks"},{state:"pending",text:"Checking the best script structure"}]);
   }
@@ -4518,7 +4551,7 @@ $id("aiSend").onclick=async function(){
     setSt("aiSt","This mode is locked for every provider in the current release. Use Auto, Fast, or Plan.",false);return;
   }
   if(isFreeMode&&freeIsLockedOut()){
-    setSt("aiSt","Free AI credits are exhausted. They reset to 5 every 48 hours.",false);return;
+    setSt("aiSt","Free AI tokens are exhausted. They reset to 5 every 48 hours.",false);return;
   }
 
   var autoSel=null;
@@ -4541,13 +4574,13 @@ $id("aiSend").onclick=async function(){
   }
   if(!isFreeMode&&!key){setSt("aiSt","Save an API key for the selected provider, or use Free AI.",false);return;}
 
-  btn.disabled=true;
+  var sendLabel=btn.textContent;btn.disabled=true;btn.classList.add("loading");btn.textContent="Building…";
   var chat=getChat(),ts=Date.now();
   chat.push({role:"user",text:prompt||(attachedImg?"[image]":""),ts:ts});
   setChat(chat);renderChat();$id("aiIn").value="";
   var cfg=modeCfg();
   setSt("aiSt",isFreeMode?"Free AI is preparing your response…":aiMode+"…",true);
-  var live=createLiveBubble(provider);
+  var live=createLiveBubble(provider,aiMode);
   setLiveExecution(live,"model",isFreeMode?"Using the shared Free AI allowance":"Using your selected provider");
   if(cfg.anim)startAnim(cfg.anim);
   await sleep(Math.min(cfg.delay,300));
@@ -4582,7 +4615,7 @@ $id("aiSend").onclick=async function(){
     processResp(raw);
     if(isFreeMode){
       updateFreeCreditsBar();
-      addLog("aiLog","Free AI: 1 credit used ("+freeCreditsLeft()+" left)","lo");
+      addLog("aiLog","Free AI: 1 token used ("+freeCreditsLeft()+" left)","lo");
       setSt("aiSt","Free AI response complete",true);
     }else{
       setSt("aiSt","OK",true);
@@ -4593,7 +4626,7 @@ $id("aiSend").onclick=async function(){
     var c2=getChat();c2.push({role:"ai",text:"Error: "+(err.message||"Request failed"),ts:Date.now()});setChat(c2);renderChat();
     setSt("aiSt",err.message||"Request failed",false);
   }finally{
-    stopAnim();btn.disabled=false;
+    stopAnim();btn.disabled=false;btn.classList.remove("loading");btn.textContent=sendLabel;
   }
 };
 $id("aiIn").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$id("aiSend").click();}});
