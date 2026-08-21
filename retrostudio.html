@@ -2289,7 +2289,7 @@ We found your existing local account. After login, your data will be migrated au
 <div class="dash-stat"><div class="v" id="dashFree">10/10</div><div class="l">Free AI</div></div>
 <div class="dash-stat"><div class="v" id="dashOnline">—</div><div class="l">Online</div></div>
 
-<div style="font-size:.72rem;color:var(--mu);margin-top:8px">Email: <span id="dashEmail">—</span></div></div>
+<div class="privacy-note" style="font-size:.68rem;color:var(--mu);margin-top:8px">Email address hidden for privacy.</div></div>
 <div id="profilePreview" style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
 <img id="profileAvatar" src="" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover;display:none"/>
 <div id="profileAvatarFallback" style="width:48px;height:48px;border-radius:50%;background:var(--ac);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem"></div>
@@ -2501,10 +2501,10 @@ var authMode="signup";
 var isLocalMode=true;
 var LOCAL_ACCT=null;
 var FREE_DAILY_LIMIT=5;
-var FREE_API_KEY="";
+/* Groq credentials are server-side only; never add one to browser code. */
 
 function saveU(o){} 
-function loadU(){return SB_USER?{name:SB_ACCT&&SB_ACCT.display_name||SB_USER.email}:null;}
+function loadU(){return SB_USER?{name:SB_ACCT&&SB_ACCT.display_name||"User"}:null;}
 function hashPass(s){var h=0;for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0;}return "h"+Math.abs(h);}
 function uName(){return(SB_ACCT&&SB_ACCT.display_name)||(SB_USER&&SB_USER.email?SB_USER.email.split("@")[0]:"user");}
 
@@ -2796,7 +2796,7 @@ var counterTimer=null;
 
 var COUNTER_URL="https://koda-5a35270e.base44.app/functions/onlineUsers";
 
-var FREE_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+var FREE_AI_FUNCTION_URL = SB_URL+"/functions/v1/free-ai";
 
 function coderData(){
   if(!SB_CODER)SB_CODER={count:0,week:getWeekNum()};
@@ -2806,11 +2806,31 @@ function coderData(){
 
 function freeKey(){return "free_"+(SB_USER?SB_USER.id:"local");}
 
-function getFreeApiKey(){
-  /* Prefer a server-managed key when present; otherwise permit the signed-in user's saved Groq key. */
-  if(FREE_API_KEY&&FREE_API_KEY.trim()&&FREE_API_KEY.trim()!=="PASTE_YOUR_OPENROUTER_KEY_HERE")return FREE_API_KEY.trim();
-  if(SB_KEYS&&SB_KEYS.free&&SB_KEYS.free.trim())return SB_KEYS.free.trim();
-  return "";
+function getFreeApiKey(){return "";} // Shared Groq credentials are never exposed to the browser.
+async function refreshFreeCreditsFromServer(){
+  if(!SB_USER||isLocalMode)return;
+  try{
+    var r=await sb.rpc("get_free_ai_credits");
+    if(r.error)throw r.error;
+    var row=Array.isArray(r.data)?r.data[0]:r.data;
+    if(row){
+      var resetMs=row.reset_at?new Date(row.reset_at).getTime():Date.now()+48*60*60*1000;
+      SB_FREE={credits:Math.max(0,Number(row.credits_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
+      updateFreeCreditsBar();updateCurrencyHud();
+    }
+  }catch(e){console.warn("Free AI credit sync unavailable",e.message||e);}
+}
+async function callFreeAiServer(sys,prompt,cfg){
+  var sessionResult=await sb.auth.getSession();
+  var token=sessionResult&&sessionResult.data&&sessionResult.data.session&&sessionResult.data.session.access_token;
+  if(!token)throw new Error("Sign in to use Free AI");
+  var response=await fetch(FREE_AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,"apikey":SB_KEY},body:JSON.stringify({system:sys,prompt:prompt,mode:aiMode})});
+  var data=await response.json().catch(function(){return {};});
+  if(!response.ok)throw new Error(data.error||"Free AI is temporarily unavailable");
+  var resetMs=data.reset_at?new Date(data.reset_at).getTime():Date.now()+48*60*60*1000;
+  SB_FREE={credits:Math.max(0,Number(data.credits_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
+  updateFreeCreditsBar();updateCurrencyHud();
+  return data.content;
 }
 
 function saveFree(d){SB_FREE=d;sbSync();}
@@ -2926,7 +2946,7 @@ function showMain(name){
     var dn=$id("dashName");if(dn)dn.textContent=name||"—";
     var ds=$id("dashSession");if(ds)ds.textContent="Active";
     try{if(typeof updateProfilePreview==="function")updateProfilePreview();}catch(e){}
-    try{if(SB_USER&&SB_USER.email){var de=$id("dashEmail");if(de)de.textContent=SB_USER.email;}}catch(e){}
+    /* Email addresses are intentionally not rendered in the authenticated UI. */
     try{if(SB_ACCT&&SB_ACCT.profile_picture){var np=$id("newPic");if(np)np.value=SB_ACCT.profile_picture;}}catch(e){}
     try{if(SB_ACCT&&SB_ACCT.description){var nd=$id("newDesc");if(nd)nd.value=SB_ACCT.description;}}catch(e){}
     try{if(SB_ACCT&&SB_ACCT.known_as){var tags=SB_ACCT.known_as.split(",");document.querySelectorAll("#profileKnownAs .known-tag").forEach(function(el){if(tags.indexOf(el.dataset.tag.trim())>-1)el.classList.add("selected");else el.classList.remove("selected");});}}catch(e){}
@@ -2939,6 +2959,7 @@ function showMain(name){
     try{setupRealtime();loadNotifications();}catch(e){}
     try{loadSocialData();}catch(e){}
     try{if(typeof updateFreeCreditsBar==="function")updateFreeCreditsBar();}catch(e){}
+    try{refreshFreeCreditsFromServer();}catch(e){}
   }catch(e){console.warn("showMain error:",e);}
   /* Final hard safety — never leave the user on a black screen */
   try{
@@ -4016,25 +4037,19 @@ $id("cbToggle").onclick=function(){blockComments=!blockComments;try{localStorage
 /* Coder badge near chat */
 function updateCoderBadge(){var b=$id("coderBadge");if(!b)return;if(aiMode==="coder"){var left=coderLeft();b.style.display="block";b.className="coder-badge";b.innerHTML="Coder mode: <b>"+left+"</b>/10 messages left this week"+(left===0?" (resets Monday)":"");}else{b.style.display="none";}}
 function updateModeLocks(){
-  var _freeProv=($id("prov")&&$id("prov").value==="free");
   var lockedModes=["long","coder","think"];
   $id("modeRow").querySelectorAll("button").forEach(function(b){
-    if(_freeProv&&lockedModes.indexOf(b.dataset.mode)>-1){b.classList.add("free-locked");}
-    else{b.classList.remove("free-locked");}
+    b.classList.toggle("free-locked",lockedModes.indexOf(b.dataset.mode)>-1);
+    if(lockedModes.indexOf(b.dataset.mode)>-1)b.title="Locked for this release";
   });
 }
-/* Call updateModeLocks when provider changes */
-var _origProvChange=$id("prov").onchange;
 $id("prov").addEventListener("change",function(){setTimeout(updateModeLocks,50);});
 $id("modeRow").addEventListener("click",function(e){var b=e.target;if(b.tagName!=="BUTTON")return;
-  var _freeProv=($id("prov").value==="free");
-  if(_freeProv&&(b.dataset.mode==="long"||b.dataset.mode==="coder"||b.dataset.mode==="think")){
-    var modeNames={long:"📝 Long",coder:"💻 Coder",think:"🧠 Think"};
-    setSt("aiSt",modeNames[b.dataset.mode]+" is Pro only. Switch to a paid provider or use Fast/Auto.",false);
+  if(["long","coder","think"].indexOf(b.dataset.mode)>-1){
+    setSt("aiSt","This mode is locked for every provider in the current release. Use Auto, Fast, or Plan.",false);
     return;
   }
   aiMode=b.dataset.mode||"fast";$id("modeRow").querySelectorAll("button").forEach(function(x){x.classList.toggle("on",x===b);});updateCoderBadge();});
-/* Initial lock state */
 setTimeout(updateModeLocks,100);
 var replitAnimTimer=null,replitPhase=0;
 function startReplitAnim(el){
@@ -4258,28 +4273,12 @@ async function callProvider(prov,key,sys,prompt,cfg){
     var cmsgs=[{role:"user",content:prompt}];if(attachedImg)cmsgs[0].content=[{type:"text",text:prompt},{type:"image",source:{type:"base64",media_type:"image/jpeg",data:attachedImg.split(",")[1]}}];
     res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","dangerouslyAllowBrowser":"true"},body:JSON.stringify({model:"claude-3-5-haiku-20241022",max_tokens:cfg.tokens,temperature:cfg.temp,system:sys,messages:cmsgs})});data=await res.json();if(data.error)throw new Error(data.error.message);raw=data.content[0].text;
   }else if(prov==="free"){
-    /* Free AI via Groq: GPT-OSS-20B (smaller, medium intelligence, slightly slower) */
-    var gKey=getFreeApiKey();if(!gKey)throw new Error("Free AI key not configured. Contact the site owner.");
-    var msgs=[{role:"system",content:sys},{role:"user",content:prompt}];
-    /* Cap tokens lower for free plan, slightly higher temp for less precise (medium) output */
-    var freeTokens=Math.min(cfg.tokens,1500);
-    var freeTemp=Math.max(cfg.temp,0.6);
-    res=await fetch(FREE_API_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+gKey},body:JSON.stringify({model:FREE_MAIN_MODEL,max_tokens:freeTokens,temperature:freeTemp,messages:msgs})});
-    data=await res.json();if(data.error)throw new Error(data.error.message);raw=data.choices[0].message.content;
+    raw=await callFreeAiServer(sys,prompt,cfg);
   }
   return raw;
 }
 /* Groq fallback — called when any provider errors */
-async function groqFallback(sys,prompt,cfg){
-  var gKey=getFreeApiKey();if(!gKey)return null;
-  var msgs=[{role:"system",content:sys},{role:"user",content:prompt}];
-  try{
-    var res=await fetch(FREE_API_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+gKey},body:JSON.stringify({model:FREE_MAIN_MODEL,max_tokens:Math.min(cfg.tokens,2000),temperature:0.5,messages:msgs})});
-    var data=await res.json();
-    if(data.error)return null;
-    return data.choices[0].message.content;
-  }catch(e){return null;}
-}
+async function groqFallback(){return null;} // No provider may fall back to the shared Free AI key.
 
 /* === STREAMING: Live response display === */
 async function callProviderStream(prov,key,sys,prompt,cfg,onChunk){
@@ -4320,19 +4319,8 @@ async function callProviderStream(prov,key,sys,prompt,cfg,onChunk){
       buffer+=decoder.decode(ch.value,{stream:true});var lines=buffer.split("\n");buffer=lines.pop();
       for(var li=0;li<lines.length;li++){var line=lines[li].trim();if(line.startsWith("data: ")){var data=line.substring(6);try{var d=JSON.parse(data);if(d.type==="content_block_delta"&&d.delta&&d.delta.text){emit(d.delta.text);}}catch(e){}}}}
   }else if(prov==="free"){
-    var orKey=getFreeApiKey();if(!orKey)throw new Error("Free AI key not configured. Contact the site owner.");
-    var freeModel=freeShouldUseFallback()?FREE_FALLBACK_MODEL:FREE_MAIN_MODEL;
-    /* Free plan: cap tokens + add delay for medium-tier feel */
-    if(typeof FREE_TOKEN_LIMIT!=="undefined")cfg=Object.assign({},cfg,{tokens:Math.min(cfg.tokens,FREE_TOKEN_LIMIT)});
-    if(typeof FREE_EXTRA_DELAY!=="undefined")await sleep(FREE_EXTRA_DELAY);
-    var msgs=[{role:"system",content:sys},{role:"user",content:prompt}];
-    var body=JSON.stringify({model:freeModel,max_tokens:cfg.tokens,temperature:cfg.temp,messages:msgs,stream:true});
-    var res=await fetch(FREE_API_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+orKey,"HTTP-Referer":"https://vyrion.app","X-Title":"RetroStudio"},body:body});
-    if(!res.ok){var err=await res.json();throw new Error(err.error?err.error.message:"Free AI stream failed");}
-    var reader=res.body.getReader();var decoder=new TextDecoder();var buffer="";
-    while(true){var ch=await reader.read();if(ch.done)break;
-      buffer+=decoder.decode(ch.value,{stream:true});var lines=buffer.split("\n");buffer=lines.pop();
-      for(var li=0;li<lines.length;li++){var line=lines[li].trim();if(line.startsWith("data: ")){var data=line.substring(6);if(data==="[DONE]")continue;try{var d=JSON.parse(data);if(d.choices&&d.choices[0]&&d.choices[0].delta&&d.choices[0].delta.content){emit(d.choices[0].delta.content);}}catch(e){}}}}
+    var freeRaw=await callFreeAiServer(sys,prompt,cfg);
+    emit(freeRaw);
   }
   if(!fullText)throw new Error("No response from "+prov);
   return fullText;
@@ -4388,7 +4376,7 @@ function updateLiveBubble(live,fullText){
   $id("aiLog").scrollTop=$id("aiLog").scrollHeight;
 }
 
-function loadKey(){var inp=$id("apiKey"),btn=$id("keyBtn"),s=null;var pv=$id("prov").value;if(pv==="ollama"){inp.value="";inp.placeholder="Server handles Ollama key";inp.readOnly=true;btn.textContent="Save";btn.disabled=true;return;}btn.disabled=false;s=SB_KEYS[pv]||null;if(s){inp.value=s;inp.readOnly=true;btn.textContent="Del";}else{inp.value="";inp.readOnly=false;inp.placeholder="paste key here";btn.textContent="Save";}}
+function loadKey(){var inp=$id("apiKey"),btn=$id("keyBtn"),s=null;var pv=$id("prov").value;if(pv==="ollama"||pv==="free"){inp.value="";inp.placeholder=pv==="free"?"Server-managed Free AI key":"Server handles Ollama key";inp.readOnly=true;btn.textContent="Server";btn.disabled=true;return;}btn.disabled=false;s=SB_KEYS[pv]||null;if(s){inp.value=s;inp.readOnly=true;btn.textContent="Del";}else{inp.value="";inp.readOnly=false;inp.placeholder="paste key here";btn.textContent="Save";}}
 /* Provider change: load key, update dash, toggle free credits row */
 $id("prov").onchange=function(){loadKey();updateDash();var fr=$id("freeKeyRow");if(fr)fr.style.display=($id("prov").value==="free")?"block":"none";if($id("prov").value==="free")updateFreeCreditsBar();};
 $id("keyBtn").onclick=function(){
@@ -4491,132 +4479,92 @@ function processResp(raw){
 function getMemory(chat){return chat.filter(function(m){return m.role==="user";}).slice(-4).map(function(m){return m.text.substring(0,80);}).join("; ");}
 
 $id("aiSend").onclick=async function(){
-  var prompt=($id("aiIn").value||"").trim();var btn=$id("aiSend");
-  var isFreeMode=$id("prov").value==="free";
-  if(!isFreeMode&&!SB_KEYS[$id("prov").value]&&!getFreeApiKey()){setSt("aiSt","No API key set. Switch to Free AIs or add your key.",false);return;}
-  /* Free AI credit check */
-  var isPlanMode=aiMode==="plan";
-  if(isFreeMode){
-    if(freeIsLockedOut()){setSt("aiSt","Free AI locked — wait for reset. See Free AIs credits.",false);return;}
-    if(!getFreeApiKey()){setSt("aiSt","Free AI key not configured. Contact the site owner.",false);return;}
-    var cost=isPlanMode?0:freeTaskCost(prompt);
-    if(!freeCanSend(cost)){setSt("aiSt","Not enough free credits ("+freeCreditsLeft()+"/"+FREE_DAILY_LIMIT+"). Cost: "+cost,false);return;}
+  var prompt=($id("aiIn").value||"").trim();
+  var btn=$id("aiSend");
+  var selectedProvider=$id("prov").value;
+  var isFreeMode=selectedProvider==="free";
+  if(!prompt&&!attachedImg){setSt("aiSt","Type a message",false);return;}
+  if(["long","coder","think"].indexOf(aiMode)>-1){
+    setSt("aiSt","This mode is locked for every provider in the current release. Use Auto, Fast, or Plan.",false);return;
   }
-  if(isPlanMode&&!isFreeMode){
-    /* Plan mode with regular providers - just needs a key */
+  if(isFreeMode&&freeIsLockedOut()){
+    setSt("aiSt","Free AI credits are exhausted. They reset to 5 every 48 hours.",false);return;
   }
-  /* AUTO MODE: check available providers, pick best, setup fallback chain */
+
   var autoSel=null;
   if(aiMode==="auto"){
-    autoSel=selectAutoProvider(prompt);
-    if(autoSel.error){setSt("aiSt",autoSel.error,false);return;}
-    /* Selection is shown in the live execution card instead of adding chat noise. */
+    if(isFreeMode){
+      /* Free AI remains selected; it is deliberately excluded from paid-key auto routing. */
+    }else{
+      autoSel=selectAutoProvider(prompt);
+      if(autoSel.error){setSt("aiSt",autoSel.error,false);return;}
+    }
   }
+
+  var provider=selectedProvider;
   var key=null;
-  if(aiMode==="auto"&&autoSel){
-    key=SB_KEYS[autoSel.provider]||null;
-  }else{
-    try{key=localStorage.getItem(sk());}catch(e){}
+  if(autoSel){
+    provider=autoSel.provider;
+    key=SB_KEYS[provider]||null;
+  }else if(!isFreeMode){
+    key=SB_KEYS[provider]||null;
   }
-  var prov0=aiMode==="auto"?(autoSel?autoSel.provider:$id("prov").value):$id("prov").value;
-  if(!key&&prov0!=="ollama"){setSt("aiSt","Save API key first",false);return;}
-  if(!prompt&&!attachedImg){setSt("aiSt","Type a message",false);return;}
-  if(aiMode==="coder"){if(!coderCanSend()){setSt("aiSt","Coder limit reached (10/week). Resets Monday. Use Fast/Think/Long mode.",false);return;}}
-  /* Free plan restrictions: no Long, no Coder, no Think mode */
-  var _isFreeProv=($id("prov").value==="free");
-  if(_isFreeProv){
-    if(aiMode==="long"){setSt("aiSt","📝 Long mode is Pro only. Use Fast or Auto.",false);return;}
-    if(aiMode==="coder"){setSt("aiSt","💻 Coder mode is Pro only. Use Fast or Auto.",false);return;}
-    if(aiMode==="think"){setSt("aiSt","🧠 Think mode is Pro only. Use Fast or Auto.",false);return;}
-  }
+  if(!isFreeMode&&!key){setSt("aiSt","Save an API key for the selected provider, or use Free AI.",false);return;}
+
   btn.disabled=true;
-  var chat=getChat();var ts=Date.now();
+  var chat=getChat(),ts=Date.now();
   chat.push({role:"user",text:prompt||(attachedImg?"[image]":""),ts:ts});
   setChat(chat);renderChat();$id("aiIn").value="";
-  var cfg=modeCfg();setSt("aiSt",aiMode+"...",true);
-  
-  /* Create live bubble for streaming */
-  var liveProvName=aiMode==="auto"?(autoSel?autoSel.provider:"gemini"):$id("prov").value;
-  var live=createLiveBubble(liveProvName);
-  setLiveExecution(live,"model",aiMode==="auto"?"Auto-selected for this build":"Using your selected provider");
+  var cfg=modeCfg();
+  setSt("aiSt",isFreeMode?"Free AI is preparing your response…":aiMode+"…",true);
+  var live=createLiveBubble(provider);
+  setLiveExecution(live,"model",isFreeMode?"Using the shared Free AI allowance":"Using your selected provider");
   if(cfg.anim)startAnim(cfg.anim);
   await sleep(Math.min(cfg.delay,300));
   var sys=buildSys(cfg,getMemory(getChat()));
-  
-  try{var raw="";
-    if(aiMode==="auto"&&autoSel){
-      /* AUTO MODE: try selected provider with streaming, fallback to others */
-      var providers=[autoSel.provider].concat(autoSel.fallback);
-      var lastErr=null;
+
+  try{
+    var raw="";
+    if(autoSel){
+      var providers=[autoSel.provider].concat(autoSel.fallback),lastErr=null;
       for(var pi=0;pi<providers.length;pi++){
-        var prov=providers[pi];
-        var provKey=null;
-        provKey=SB_KEYS[prov]||null;
-        if(!provKey){continue;}
+        var candidate=providers[pi],candidateKey=SB_KEYS[candidate]||null;
+        if(!candidateKey)continue;
         try{
-          raw=await callProviderStream(prov,provKey,sys,prompt,cfg,function(chunk,full){
-            updateLiveBubble(live,full);
-          });
-          if(pi>0){setLiveExecution(live,"model","Switched to "+provName(prov)+" and continuing");}
+          raw=await callProviderStream(candidate,candidateKey,sys,prompt,cfg,function(chunk,full){updateLiveBubble(live,full);});
+          if(pi>0)setLiveExecution(live,"model","Switched to "+provName(candidate));
           break;
-        }catch(err){
-          lastErr=err;
-          /* The execution card communicates retries without adding technical error spam to chat. */
-          /* Reset live bubble for next provider */
+        }catch(providerErr){
+          lastErr=providerErr;
           if(pi<providers.length-1){
             setLiveExecution(live,"model","Retrying with "+provName(providers[pi+1]));
             live.content.innerHTML='<span class="live-summary">The first provider was unavailable. Continuing automatically…</span><span class="live-cursor"></span>';
-            live.label.innerHTML='<span class="think-dot"></span> Switching models <span class="think-dot"></span>';
           }
         }
       }
-      if(!raw)throw new Error("All providers failed. Last: "+(lastErr?lastErr.message:"unknown"));
+      if(!raw)throw new Error("All saved providers failed. Last: "+(lastErr?lastErr.message:"unknown"));
     }else{
-      /* Non-auto: stream from selected provider */
-      var prov=$id("prov").value;
-      raw=await callProviderStream(prov,key,sys,prompt,cfg,function(chunk,full){
-        updateLiveBubble(live,full);
-      });
+      raw=await callProviderStream(provider,isFreeMode?"server-managed":key,sys,prompt,cfg,function(chunk,full){updateLiveBubble(live,full);});
     }
-    
-    /* Remove live bubble and process the final response */
+
     if(live.row&&live.row.parentNode)live.row.parentNode.removeChild(live.row);
     attachedImg=null;$id("imgPreviewBox").style.display="none";$id("imgPreviewBox").innerHTML="";$id("typingRow").style.display="none";
-    processResp(raw);setSt("aiSt","OK",true);if(aiMode==="coder"){useCoderMsg();updateCoderBadge();}
-  /* Free AI credit consumption */
-  if(isFreeMode){
-    if(isPlanMode){
-      var planLen=raw.length;
-      freeConsumePlan(planLen);
+    processResp(raw);
+    if(isFreeMode){
+      updateFreeCreditsBar();
+      addLog("aiLog","Free AI: 1 credit used ("+freeCreditsLeft()+" left)","lo");
+      setSt("aiSt","Free AI response complete",true);
     }else{
-      freeConsume(freeTaskCost(prompt));
+      setSt("aiSt","OK",true);
     }
-    updateFreeCreditsBar();
-    addLog("aiLog","Free AI: -"+(isPlanMode?Math.ceil(planLen/250*0.5*10)/10:freeTaskCost(prompt))+" credits ("+freeCreditsLeft()+" left)","lo");
-  }
   }catch(err){
-    /* Try Groq fallback before showing error */
-    if(getFreeApiKey()){
-      addLog("aiLog","Provider failed, trying Groq fallback...","lw");
-      try{
-        var cfg=modeCfg();
-        var sys=buildSys(cfg,getMemory(getChat()));
-        var fbRaw=await groqFallback(sys,prompt,cfg);
-        if(fbRaw&&fbRaw.trim()){
-          if(live.row&&live.row.parentNode)live.row.parentNode.removeChild(live.row);
-          attachedImg=null;$id("imgPreviewBox").style.display="none";$id("imgPreviewBox").innerHTML="";
-          $id("typingRow").style.display="none";
-          processResp(fbRaw);
-          setSt("aiSt","✅ Via Groq fallback",true);
-          return;
-        }
-      }catch(fbErr){}
-    }
     if(live.row&&live.row.parentNode)live.row.parentNode.removeChild(live.row);
     $id("typingRow").style.display="none";
-    var c2=getChat();c2.push({role:"ai",text:"Error: "+err.message,ts:Date.now()});setChat(c2);renderChat();setSt("aiSt",err.message,false);
+    var c2=getChat();c2.push({role:"ai",text:"Error: "+(err.message||"Request failed"),ts:Date.now()});setChat(c2);renderChat();
+    setSt("aiSt",err.message||"Request failed",false);
+  }finally{
+    stopAnim();btn.disabled=false;
   }
-  finally{stopAnim();btn.disabled=false;}
 };
 $id("aiIn").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$id("aiSend").click();}});
 setTimeout(function(){if(typeof pako!=="undefined"&&$id("main").style.display==="block"){var v=$id("luaIn").value;if(v&&v.trim())doEncode();}},500);
@@ -4711,7 +4659,7 @@ async function cancelFriendRequest(uid){
 
 async function removeFriend(uid){
   try{
-    var r=await sb.from("FRIENDSHIPS").delete().or("requester_id.eq."+SB_USER.id+",addressee_id.eq."+SB_USER.id).eq("status","accepted");
+    var r=await sb.from("FRIENDSHIPS").delete().or("and(requester_id.eq."+SB_USER.id+",addressee_id.eq."+uid+"),and(requester_id.eq."+uid+",addressee_id.eq."+SB_USER.id+")").eq("status","accepted");
     if(r.error)throw r.error;
     loadSocialData();
   }catch(e){setSt("chatSt",e.message||"Failed to remove friend",false);}
@@ -4734,7 +4682,7 @@ async function loadSocialData(){
     $id("requestsCount").textContent=requests.filter(function(r){return r.direction==="incoming"}).length;
     renderFriends(friends);
     renderRequests(requests);
-  }catch(e){console.warn("social load error",e);}
+  }catch(e){console.warn("social load error",e);setSt("chatSt","Social is unavailable until the Supabase policy migration is applied.",false);}
 }
 
 function renderFriends(friends){
