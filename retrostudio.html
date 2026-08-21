@@ -4413,9 +4413,9 @@ $id("imgInput").onchange=function(ev){var f=ev.target.files[0];if(!f)return;var 
 /* System prompt with FULL block reference */
 function buildSys(cfg,mem){if(cfg&&cfg.fastPlan){return "You are RetroStudio AI. Give a QUICK plan (max 5 steps, 1 line each). No code. Be fast and concise. End with PLAN_COMPLETE.\n"+(mem?"Context: "+mem+"\n":"");}var extra="";if(cfg&&cfg.thinking){extra="\n\n=== THINKING MODE ACTIVE ===\nTake extra time to analyze the request thoroughly. Break down complex logic step by step. Consider edge cases.\nWhen debugging, ALWAYS ask the user to send a screenshot of the output.\n";}
   return "You are RetroStudio AI — expert in CoolFormat visual scripting for RetroStudio.\n"
-    +"Be friendly and conversational. Explain scripts briefly then give code.\n"
-    +"ALWAYS wrap Lua in LUA_START and LUA_END tags.\n"
-    +"ALWAYS after code output: ENCODE[<exact same lua>]END_ENCODE\n"
+    +"Return the finished script only. Never send a greeting, explanation, Markdown fence, or raw Lua outside the required tags.\n"
+    +"For every normal script response, output exactly: LUA_START, the Luau code, LUA_END, then ENCODE[<the exact same Luau>]END_ENCODE.\n"
+    +"The RetroStudio client converts the tagged Luau into a direct-copy encoded script, so the tags are mandatory.\n"
     +"ONE statement per line. Never name a variable 'Object'. No task.*, no ProximityPrompt.\n"
     +"The code in ENCODE[...] must be IDENTICAL to the code in LUA_START...LUA_END.\n\n"
     +"=== SUPPORTED PATTERNS (write code EXACTLY like this) ===\n\n"
@@ -4457,37 +4457,53 @@ function buildSys(cfg,mem){if(cfg&&cfg.fastPlan){return "You are RetroStudio AI.
     +"\nMode: "+(aiMode==="auto"?"AUTO (smart selection)":aiMode)+". "+(aiMode==="coder"?"You are an EXPERT CoolFormat programmer. Verify EVERY single line maps to a valid block type. Check each pattern against the reference above. If a line would be SKIPPED, rewrite it. You may output MULTIPLE scripts — each wrapped in ENCODE[...]END_ENCODE. Split complex requests into separate scripts (one per event, one per function, one per UI element). Label each script with a --@ comment. Prefer simple, line-based code. Avoid nested expressions — break them into local variables. Example: instead of \"local x=obj:GetProp():GetMethod()\", write \"local p=obj:GetProp()\\nlocal x=p:GetMethod()\". Always end with return or the last statement.":aiMode==="think"?"Think step by step, then output complete code. For complex requests, output MULTIPLE scripts each in ENCODE[...]END_ENCODE. Break down the solution into logical parts.":aiMode==="long"?"Be detailed and thorough.":"Be clear and friendly.");
 }
 
-/* Process AI response — ALWAYS extract code and encode */
+/* Process AI response — extract tagged code even when a provider misses LUA_END. */
+function extractAiScripts(raw){
+  var scripts=[],seen={};
+  function add(code){
+    code=(code||"").trim();
+    if(code&&!seen[code]){seen[code]=true;scripts.push(code);}
+  }
+  var enRe=/ENCODE\[([\s\S]*?)\]END_ENCODE/g,em;
+  while((em=enRe.exec(raw))!==null)add(em[1]);
+  if(!scripts.length){
+    /* The end tag is optional here on purpose: Free AI can occasionally omit it. */
+    var lsRe=/LUA_START\s*\n?([\s\S]*?)(?:\n?\s*LUA_END\b|$)/ig,lm;
+    while((lm=lsRe.exec(raw))!==null)add(lm[1]);
+  }
+  if(!scripts.length){
+    var cbRe=/```(?:lua|luau)?\s*\n?([\s\S]*?)```/ig,cm;
+    while((cm=cbRe.exec(raw))!==null)add(cm[1]);
+  }
+  return scripts;
+}
 function processResp(raw){
-  /* Plan mode: show plan in a special box, don't encode */
+  /* Plan mode intentionally remains readable and is never encoded. */
   if(aiMode==="plan"){
-    var ts=Date.now();var chat=getChat();
+    var planTs=Date.now(),planChat=getChat();
     var planText=raw.replace("PLAN_COMPLETE","").trim();
     var planCost=Math.ceil(planText.length/250*0.5*10)/10;
-    chat.push({role:"ai",text:"__PLAN__"+planText+"__PLAN_END__",ts:ts,planCost:planCost});
-    setChat(chat);renderChat();return;
+    planChat.push({role:"ai",text:"__PLAN__"+planText+"__PLAN_END__",ts:planTs,planCost:planCost});
+    setChat(planChat);renderChat();return;
   }
-  var ts=Date.now();var chat=getChat();
-  var display=raw.replace(/ENCODE\[[\s\S]*?\]END_ENCODE/g,"").replace(/LUA_START[\s\S]*?LUA_END/g,"").replace(/```[\s\S]*?```/g,"").trim();
-  if(display)chat.push({role:"ai",text:display,ts:ts});
-  var scripts=[];
-  var enRe=/ENCODE\[([\s\S]*?)\]END_ENCODE/g;var em;
-  while((em=enRe.exec(raw))!==null)scripts.push(em[1].trim());
-  if(!scripts.length){var lsRe=/LUA_START([\s\S]*?)LUA_END/g;var lm;while((lm=lsRe.exec(raw))!==null)scripts.push(lm[1].trim());}
-  if(!scripts.length){var cbRe=/```(?:lua|luau)?\n?([\s\S]*?)```/g;var cm;while((cm=cbRe.exec(raw))!==null)scripts.push(cm[1].trim());}
+  var ts=Date.now(),chat=getChat(),scripts=extractAiScripts(raw);
   if(scripts.length){
+    /* Do not add a raw-Luau message. The encoded card is the only final script output. */
     for(var si=0;si<scripts.length;si++){
-      var code=scripts[si].trim();
+      var code=scripts[si];
       $id("luaIn").value=code;
       var enc=doEncode();
       if(enc){
         var label=scripts.length>1?"Script "+(si+1)+" of "+scripts.length+" — ":"";
         chat.push({role:"encode",text:enc.wrapped,title:"ENCODED SCRIPT "+(si+1),stats:label+enc.blocks+" supported blocks",ts:ts+si+1});
       }else{
-        chat.push({role:"ai",text:"Encoding failed for script "+(si+1)+" — check the Encode tab.",ts:ts+si+1});
+        chat.push({role:"ai",text:"I could not convert that script into CoolFormat. Please try the request again with a simpler script.",ts:ts+si+1});
       }
     }
-  } else if(!display){chat.push({role:"ai",text:raw,ts:ts});}
+  }else{
+    var display=(raw||"").replace(/LUA_START[\s\S]*$/i,"").replace(/```[\s\S]*?```/g,"").trim();
+    chat.push({role:"ai",text:display||"The AI returned no script. Please try again.",ts:ts});
+  }
   setChat(chat);renderChat();
 }
 function getMemory(chat){return chat.filter(function(m){return m.role==="user";}).slice(-4).map(function(m){return m.text.substring(0,80);}).join("; ");}

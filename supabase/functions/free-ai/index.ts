@@ -61,11 +61,26 @@ Deno.serve(async (request) => {
   }
 
   // The RPC uses the authenticated caller's JWT. It locks the row and deducts
-  // exactly one credit from a five-credit, forty-eight-hour allocation.
-  const { data: creditRows, error: creditError } = await userClient.rpc("consume_free_ai_credit");
+  // exactly one credit from a five-credit, forty-eight-hour allocation. A short
+  // retry covers the brief schema-cache delay that can follow a fresh deployment.
+  let creditRows: unknown = null;
+  let creditError: { message?: string } | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await userClient.rpc("consume_free_ai_credit");
+    creditRows = result.data;
+    creditError = result.error;
+    if (!creditError) break;
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   if (creditError) {
-    const exhausted = /exhausted/i.test(creditError.message || "");
-    return json({ error: exhausted ? "Free AI credits are exhausted" : "Unable to check Free AI credits" }, exhausted ? 429 : 500);
+    const message = creditError.message || "";
+    const exhausted = /exhausted/i.test(message);
+    console.error("Free AI credit RPC failed", { message, userId: userData.user.id });
+    return json({
+      error: exhausted
+        ? "Free AI credits are exhausted"
+        : "Free AI credit setup is still syncing. Please wait a minute and try again.",
+    }, exhausted ? 429 : 503);
   }
   const credit = Array.isArray(creditRows) ? creditRows[0] : creditRows;
 
