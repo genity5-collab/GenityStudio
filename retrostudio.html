@@ -367,6 +367,8 @@ h1 .dot {
 
 #main {
   display: none;
+  width: 100%;
+  min-height: 1px;
 }
 
 /* Cards & Panels */
@@ -2459,7 +2461,7 @@ setTimeout(function(){
     /* Also check if authLoading is stuck (spinner showing for too long) */
     var authLoading=$id("authLoading");
     var authLoadingStuck=authLoading&&authLoading.style.display!=="none"&&!_authDone;
-    var nothingVisible=!gateVisible&&!mainVisible&&!finishVisible;
+    var nothingVisible=!gateVisible&&!mainVisible&&!finishVisible&&!lpgVisible&&!ldgVisible;
     if(nothingVisible||authLoadingStuck){
       console.warn("Safety net: stuck after 5s. SB_USER=",!!SB_USER,"SB_ACCT=",!!SB_ACCT,"_authDone=",_authDone);
       if(SB_USER&&SB_ACCT){
@@ -2890,7 +2892,20 @@ function updateDash(){
 }
 
 /* === SHOW MAIN (fixed element refs) === */
+function rsRepairMainHierarchy(){
+  /* `#main` was nested inside `#gate`; hiding the login gate therefore hid
+     the authenticated app even after `#main` was set to display:block.
+     Move it beside the gate once, preserving all handlers and application state. */
+  try{
+    var main=$id("main"),gate=$id("gate");
+    if(main&&gate&&gate.contains(main)&&gate.parentNode){
+      gate.parentNode.insertBefore(main,gate.nextSibling);
+      main.style.width="100%";
+    }
+  }catch(e){console.warn("Main hierarchy repair error:",e);}
+}
 function showMain(name){
+  rsRepairMainHierarchy();
   /* Always hide every gate / loader first so we never stay on a black screen */
   try{
     var al=$id("authLoading");if(al)al.style.display="none";
@@ -2932,7 +2947,62 @@ function showMain(name){
     var al2=$id("authLoading");if(al2)al2.style.display="none";
     var fg2=$id("finishGate");if(fg2)fg2.style.display="none";
   }catch(e){}
+  try{rsScheduleAuthViewCheck("showMain");}catch(e){}
 }
+
+/* === MOBILE-SAFE AUTH VIEW RECOVERY ===
+   OAuth/session restoration can complete after the initial 5-second watchdog,
+   especially after Chrome resumes a mobile tab. Re-check the actual rendered
+   view after every post-auth transition and restore a usable screen if all
+   authentication views are hidden. */
+var RS_AUTH_VIEW_CHECK=0;
+function rsElementVisible(el){
+  try{
+    if(!el||!el.isConnected)return false;
+    var st=window.getComputedStyle(el);
+    if(st.display==="none"||st.visibility==="hidden"||parseFloat(st.opacity||"1")===0)return false;
+    var rect=el.getBoundingClientRect();
+    return rect.width>0&&rect.height>0;
+  }catch(e){return false;}
+}
+function rsAnyAuthViewVisible(){
+  return ["main","gate","finishGate","linkPassGate","linkDiscordGate"].some(function(id){return rsElementVisible($id(id));});
+}
+function rsForceAuthView(reason){
+  if(rsAnyAuthViewVisible())return;
+  console.warn("Auth view recovery:",reason);
+  try{
+    _authProcessing=false;
+    if(SB_USER&&SB_ACCT){
+      if(SB_ACCT.display_name){
+        _authDone=true;
+        showMain(uName()||"User");
+      }else{
+        showFinishGate();
+      }
+    }else{
+      showAuthGate("Your sign-in screen was restored. Please try again.");
+    }
+  }catch(e){
+    console.warn("Auth view recovery error:",e);
+    var gate=$id("gate"),main=$id("main"),finish=$id("finishGate");
+    if(main)main.style.display="none";
+    if(finish)finish.style.display="none";
+    if(gate){gate.style.display="block";gate.style.visibility="visible";gate.style.opacity="1";}
+  }
+}
+function rsScheduleAuthViewCheck(reason){
+  var token=++RS_AUTH_VIEW_CHECK;
+  [250,1000,3500,8000].forEach(function(delay){
+    setTimeout(function(){
+      if(token===RS_AUTH_VIEW_CHECK)rsForceAuthView(reason+" after "+delay+"ms");
+    },delay);
+  });
+}
+window.addEventListener("pageshow",function(){setTimeout(function(){rsForceAuthView("pageshow");},150);});
+document.addEventListener("visibilitychange",function(){
+  if(!document.hidden)setTimeout(function(){rsForceAuthView("tab resume");},150);
+});
 
 /* === DISCORD OAUTH === */
 function loginWithDiscord(){
@@ -2984,6 +3054,7 @@ function beginAuthSession(session,source){
   if(_authDone&&SB_ACCT){SB_USER=session.user;showMain(uName());return;}
   var attempt=++AUTH_ATTEMPT;
   _authProcessing=true;SB_USER=session.user;showAuthLoading();
+  rsScheduleAuthViewCheck("authentication started");
   /* A profile read should never leave the page blank indefinitely. */
   setTimeout(function(){
     if(attempt===AUTH_ATTEMPT&&_authProcessing&&!_authDone){
@@ -3249,6 +3320,7 @@ function showFinishGate(){
     var fg=$id("finishGate");
     if(fg){fg.style.display="block";fg.style.opacity="1";fg.style.visibility="visible";}
   }catch(e){console.warn("showFinishGate visibility error:",e);}
+  try{rsScheduleAuthViewCheck("finish account");}catch(e){}
   // Pre-fill from Discord metadata (if available)
   var meta=(SB_USER&&SB_USER.user_metadata)||{};
   var fn=$id("finishName");
