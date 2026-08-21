@@ -2035,6 +2035,25 @@ textarea.sm {
 .exec-step.active b { color:#fff; }
 .exec-step.done b::before { content:'✓ '; color:var(--ok); }
 .live-edit-log { display:none; margin-top:7px; padding:7px 9px; border-radius:7px; background:rgba(0,0,0,.23); border:1px solid var(--bd); font: .65rem/1.45 'SF Mono',Consolas,monospace; color:#c8ffd4; white-space:pre-wrap; max-height:105px; overflow:auto; }
+.enc-direct-copy { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0; padding:8px 9px; border-radius:8px; background:rgba(0,170,255,.08); border:1px solid rgba(0,170,255,.27); font-size:.68rem; color:var(--tx); }
+.enc-direct-copy b { color:#0af; }
+.enc-btn.primary { width:100%; min-height:34px; font-size:.72rem; background:#0af; color:#07111d; border-color:#0af; }
+.enc-btn.primary:hover { background:#68c9ff; }
+.edit-status-list { display:grid; gap:5px; margin-top:7px; }
+.edit-status { display:flex; align-items:flex-start; gap:7px; padding:6px 7px; border-radius:6px; background:rgba(255,255,255,.035); color:var(--mu); font:.64rem/1.35 'SF Mono',Consolas,monospace; }
+.edit-status .mark { width:15px; flex:0 0 15px; font-family:system-ui,sans-serif; font-weight:800; text-align:center; }
+.edit-status.pending .mark { color:#ffce55; animation:statusPulse 1s ease-in-out infinite; }
+.edit-status.done .mark { color:#4ade80; }
+.edit-status.blocked .mark { color:#ff6b7a; }
+@keyframes statusPulse { 50% { opacity:.35; transform:scale(.82); } }
+.brick-thinking { display:flex; align-items:center; gap:10px; min-height:50px; padding:8px 0 !important; color:var(--mu) !important; font-family:system-ui,sans-serif !important; }
+.brick-loader { position:relative; width:42px; height:38px; flex:0 0 42px; }
+.ai-brick { position:absolute; width:28px; height:9px; border-radius:2px; border:1px solid rgba(225,245,255,.75); background:linear-gradient(135deg,#58caff,#5b7cff); box-shadow:0 3px 8px rgba(65,152,255,.34); left:7px; animation:brickFall 1.8s cubic-bezier(.2,.85,.25,1) infinite; }
+.ai-brick::after { content:""; position:absolute; right:4px; top:2px; width:5px; height:5px; border-radius:1px; background:rgba(255,255,255,.65); }
+.ai-brick.b1 { animation-delay:0s; } .ai-brick.b2 { animation-delay:.28s; } .ai-brick.b3 { animation-delay:.56s; }
+@keyframes brickFall { 0% { transform:translateY(-22px) rotate(-8deg); opacity:0; } 16% { opacity:1; } 38% { transform:translateY(0) rotate(0); } 58% { transform:translateY(0) rotate(0); } 75% { transform:translateY(28px) rotate(7deg); opacity:1; } 100% { transform:translateY(32px) rotate(8deg); opacity:0; } }
+.brick-thinking-copy strong { display:block; color:var(--tx); font-size:.7rem; } .brick-thinking-copy span { font-size:.61rem; color:var(--mu); }
+
 .live-content { color:var(--tx); font-size:.78rem; line-height:1.55; }
 .live-summary { color:var(--mu); }
 .enc-card { border-color:rgba(91,140,255,.7); background:linear-gradient(135deg,var(--card2),rgba(91,140,255,.09)); }
@@ -2824,8 +2843,11 @@ async function callFreeAiServer(sys,prompt,cfg){
   var sessionResult=await sb.auth.getSession();
   var token=sessionResult&&sessionResult.data&&sessionResult.data.session&&sessionResult.data.session.access_token;
   if(!token)throw new Error("Sign in to use Free AI");
-  var response=await fetch(FREE_AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,"apikey":SB_KEY},body:JSON.stringify({system:sys,prompt:prompt,mode:aiMode})});
+  var response;
+  try{response=await fetch(FREE_AI_FUNCTION_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,"apikey":SB_KEY},body:JSON.stringify({system:sys,prompt:prompt,mode:aiMode})});}
+  catch(networkError){throw new Error("Free AI server is not deployed yet. Deploy the Supabase free-ai function, then try again.");}
   var data=await response.json().catch(function(){return {};});
+  if(response.status===404)throw new Error("Free AI server is not deployed yet. Deploy the Supabase free-ai function, then try again.");
   if(!response.ok)throw new Error(data.error||"Free AI is temporarily unavailable");
   var resetMs=data.reset_at?new Date(data.reset_at).getTime():Date.now()+48*60*60*1000;
   SB_FREE={credits:Math.max(0,Number(data.credits_remaining)||0),lastReset:resetMs-48*60*60*1000,used:0};
@@ -4053,38 +4075,19 @@ $id("modeRow").addEventListener("click",function(e){var b=e.target;if(b.tagName!
 setTimeout(updateModeLocks,100);
 var replitAnimTimer=null,replitPhase=0;
 function startReplitAnim(el){
-  /* Replit-style thinking: clean minimal dots + cycling phase text */
   var phases=[
-    "Thinking",
-    "Analyzing",
-    "Reasoning",
-    "Generating",
-    "Refining"
+    ["Understanding your request","Planning compatible blocks"],
+    ["Building the script","Adding supported CoolFormat steps"],
+    ["Checking the build","Reviewing each encoded section"],
+    ["Preparing your copy card","Almost ready to import"]
   ];
-  var phase=0,frame=0,dotCount=0;
-  el.classList.add("on");
-  el.style.background="transparent";
-  el.style.border="none";
-  el.style.color="var(--mu)";
-  el.style.fontSize="0.72rem";
-  el.style.lineHeight="1.6";
-  el.style.fontFamily="-apple-system,'SF Pro Display','Segoe UI',system-ui,sans-serif";
-  el.style.padding="4px 0";
-  replitAnimTimer=setInterval(function(){
-    frame++;
-    dotCount=(dotCount+1)%4;
-    var dots="";
-    for(var d=0;d<dotCount;d++)dots+=".";
-    /* Cycle phase every ~40 frames (about 3s at 80ms) */
-    if(frame%40===0&&frame>0){phase=(phase+1)%phases.length;}
-    var pct=Math.min(99,Math.floor(frame/1.5));
-    /* Replit-style: just the phase text with animated dots + subtle progress */
-    var barLen=20;
-    var filled=Math.floor(pct/100*barLen);
-    var bar="";
-    for(var x=0;x<barLen;x++){bar+=x<filled?"█":"░";}
-    el.innerHTML=phases[phase]+dots+"<br><span style=\"font-size:0.6rem;color:var(--bd);letter-spacing:1px\">"+bar+"</span>";
-  },80);
+  var phase=0;
+  el.classList.add("on","brick-thinking");
+  el.innerHTML='<div class="brick-loader" aria-hidden="true"><i class="ai-brick b1"></i><i class="ai-brick b2"></i><i class="ai-brick b3"></i></div><div class="brick-thinking-copy"><strong></strong><span></span></div>';
+  var title=el.querySelector("strong"),detail=el.querySelector("span");
+  function paint(){title.textContent=phases[phase][0];detail.textContent=phases[phase][1];}
+  paint();
+  replitAnimTimer=setInterval(function(){phase=(phase+1)%phases.length;paint();},1800);
 }
 function stopReplitAnim(){if(replitAnimTimer){clearInterval(replitAnimTimer);replitAnimTimer=null;}}
 
@@ -4133,6 +4136,12 @@ function appendMsg(log,role,text,ts,uInit){
     bw.appendChild(planBox);bw.appendChild(meta);
     row.appendChild(av);row.appendChild(bw);log.appendChild(row);return;
   }var row=document.createElement("div");row.className="chat-row "+role;var av=document.createElement("div");av.className="av "+role;if(role==="ai"){var pv=$id("prov").value;av.style.background="transparent";av.innerHTML=provSVG(pv);}else if(role==="enc"){av.textContent="\u2713";}else{av.textContent=(uInit||"U");}var bw=document.createElement("div");bw.className="bwrap";var bub=document.createElement("div");bub.className="bubble";var parts=text.split(/```(?:\w*\n?)?/);for(var p=0;p<parts.length;p++){if(p%2===1){var code=document.createElement("code");code.textContent=parts[p].replace(/^\n/,"");bub.appendChild(code);}else if(parts[p]){var sp=document.createElement("span");sp.textContent=parts[p];bub.appendChild(sp);}}var meta=document.createElement("div");meta.className="bmeta";meta.textContent=new Date(ts||Date.now()).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});bw.appendChild(bub);bw.appendChild(meta);row.appendChild(av);row.appendChild(bw);log.appendChild(row);}
+function copyEncodedVisualSource(value,button){
+  var done=function(){button.textContent="✓ Copied — ready to import";button.classList.add("copied");setTimeout(function(){button.textContent="Copy encoded script";button.classList.remove("copied");},2600);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(done).catch(function(){fallbackCopyEncoded(value,done);});}
+  else fallbackCopyEncoded(value,done);
+}
+function fallbackCopyEncoded(value,done){var ta=document.createElement("textarea");ta.value=value;ta.setAttribute("readonly","");ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);done();}
 function appendEncCard(log,msg){
   var row=document.createElement("div");row.className="chat-row ai";
   var av=document.createElement("div");av.className="av enc";av.textContent="✓";
@@ -4142,14 +4151,15 @@ function appendEncCard(log,msg){
   var badge=document.createElement("span");badge.className="enc-badge";badge.textContent=msg.title||"ENCODED SCRIPT";
   var stats=document.createElement("span");stats.className="enc-stats";stats.textContent=msg.stats||"Ready to import";
   hdr.appendChild(badge);hdr.appendChild(stats);
-  var summary=document.createElement("div");summary.className="enc-summary";summary.innerHTML='<span class="ready-dot"></span><span>VisualSource is ready. Copy it, then paste it into RetroStudio.</span>';
+  var summary=document.createElement("div");summary.className="enc-summary";summary.innerHTML='<span class="ready-dot"></span><span>Encoded VisualSource is ready. No Encode-tab paste is needed.</span>';
+  var direct=document.createElement("div");direct.className="enc-direct-copy";direct.innerHTML='<span><b>Ready now</b><br>Copy the finished encoded script directly.</span>';
   var details=document.createElement("details");details.className="enc-details";
   var detailLabel=document.createElement("summary");detailLabel.textContent="View encoded data";
   var out=document.createElement("div");out.className="enc-out";out.textContent=msg.text||"";
   details.appendChild(detailLabel);details.appendChild(out);
-  var btn=document.createElement("button");btn.className="enc-btn";btn.textContent="Copy VisualSource";
-  var txt=msg.text||"";btn.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(txt).then(function(){btn.textContent="Copied!";btn.classList.add("copied");setTimeout(function(){btn.textContent="Copy VisualSource";btn.classList.remove("copied");},2500);});else{var ta=document.createElement("textarea");ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);btn.textContent="Copied!";setTimeout(function(){btn.textContent="Copy VisualSource";},2500);}};
-  card.appendChild(hdr);card.appendChild(summary);card.appendChild(details);card.appendChild(btn);
+  var btn=document.createElement("button");btn.className="enc-btn primary";btn.type="button";btn.textContent="Copy encoded script";
+  var txt=msg.text||"";btn.onclick=function(){copyEncodedVisualSource(txt,btn);};
+  card.appendChild(hdr);card.appendChild(summary);card.appendChild(direct);card.appendChild(btn);card.appendChild(details);
   var meta=document.createElement("div");meta.className="bmeta";meta.textContent=new Date(msg.ts||Date.now()).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
   bw.appendChild(card);bw.appendChild(meta);row.appendChild(av);row.appendChild(bw);log.appendChild(row);
 }
@@ -4327,6 +4337,9 @@ async function callProviderStream(prov,key,sys,prompt,cfg,onChunk){
 }
 
 /* Live bubble: shows AI text streaming in real time */
+function editStatusMarkup(items){
+  return '<div class="edit-status-list">'+items.map(function(item){return '<div class="edit-status '+item.state+'"><span class="mark">'+(item.state==="done"?"✓":item.state==="blocked"?"✕":"◷")+'</span><span>'+escLive(item.text)+'</span></div>';}).join("")+"</div>";
+}
 function createLiveBubble(pvName){
   var log=$id("aiLog");
   var row=document.createElement("div");row.className="chat-row ai";
@@ -4335,9 +4348,9 @@ function createLiveBubble(pvName){
   var bub=document.createElement("div");bub.className="live-bubble";
   var label=document.createElement("div");label.className="think-label";label.innerHTML='<span class="think-dot"></span> Preparing '+provName(pvName)+' <span class="think-dot"></span>';
   var execution=document.createElement("div");execution.className="execution-card";
-  execution.innerHTML='<div class="execution-card-head"><span>Build progress</span><span>'+provName(pvName)+'</span></div><div class="execution-steps"><div class="exec-step active" data-step="model"><b>1. Model</b>Ready to write</div><div class="exec-step" data-step="write"><b>2. Script</b>Waiting</div><div class="exec-step" data-step="encode"><b>3. Encode</b>Waiting</div></div>';
+  execution.innerHTML='<div class="execution-card-head"><span>Build progress</span><span>'+provName(pvName)+'</span></div><div class="execution-steps"><div class="exec-step active" data-step="model"><b>1. Model</b>Reviewing request</div><div class="exec-step" data-step="write"><b>2. Script</b>Waiting</div><div class="exec-step" data-step="encode"><b>3. Encode</b>Waiting</div></div>';
   var ct=document.createElement("div");ct.className="live-content";ct.innerHTML='<span class="live-summary">Preparing a clear build plan…</span><span class="live-cursor"></span>';
-  var editLog=document.createElement("div");editLog.className="live-edit-log";
+  var editLog=document.createElement("div");editLog.className="live-edit-log";editLog.style.display="block";editLog.innerHTML=editStatusMarkup([{state:"pending",text:"Reading your request"},{state:"pending",text:"Planning supported CoolFormat blocks"},{state:"pending",text:"Waiting to encode the finished script"}]);
   bub.appendChild(label);bub.appendChild(execution);bub.appendChild(ct);bub.appendChild(editLog);bw.appendChild(bub);row.appendChild(av);row.appendChild(bw);
   log.appendChild(row);log.scrollTop=log.scrollHeight;
   return {row:row,bubble:bub,content:ct,label:label,execution:execution,editLog:editLog,provider:pvName};
@@ -4350,8 +4363,7 @@ function setLiveExecution(live,active,detail){
   if(detail){var target=live.execution.querySelector('[data-step="'+active+'"]');if(target){var body=target.childNodes[target.childNodes.length-1];if(body)body.textContent=detail;}}
 }
 function latestScriptSnippet(raw){
-  var match=raw.match(/LUA_START([\s\S]*?)(?:LUA_END|$)/);
-  var code=match?match[1]:"";
+  var match=raw.match(/LUA_START([\s\S]*?)(?:LUA_END|$)/);var code=match?match[1]:"";
   if(!code){var cb=raw.match(/```(?:lua|luau)?\n?([\s\S]*?)(?:```|$)/i);code=cb?cb[1]:"";}
   return code.split("\n").filter(function(line){return line.trim();}).slice(-5).join("\n");
 }
@@ -4360,18 +4372,20 @@ function updateLiveBubble(live,fullText){
   var raw=fullText||"",hasLUA=raw.indexOf("LUA_START")>=0||raw.indexOf("```")>=0,hasENCODE=raw.indexOf("ENCODE[")>=0;
   if(hasENCODE){
     live.label.innerHTML='<span class="think-dot"></span> Encoding your VisualSource <span class="think-dot"></span>';
-    setLiveExecution(live,"encode","Creating import-ready cards");
-    live.content.innerHTML='<span class="live-summary">Your script is ready. Packaging encoded VisualSource…</span><span class="live-cursor"></span>';
+    setLiveExecution(live,"encode","Creating direct-copy card");
+    live.content.innerHTML='<span class="live-summary">Script complete. Creating your one-click encoded copy…</span><span class="live-cursor"></span>';
+    live.editLog.innerHTML=editStatusMarkup([{state:"done",text:"Request understood"},{state:"done",text:"Script generated"},{state:"pending",text:"Encoding direct-copy VisualSource"}]);
   }else if(hasLUA){
     var snippet=latestScriptSnippet(raw);
     live.label.innerHTML='<span class="think-dot"></span> Writing your Luau script <span class="think-dot"></span>';
     setLiveExecution(live,"write","Adding supported blocks");
     live.content.innerHTML='<span class="live-summary">Latest script changes</span><pre class="code-preview">'+escLive(snippet||"Drafting supported CoolFormat code…")+'</pre><span class="live-cursor"></span>';
-    if(snippet){live.editLog.style.display="block";live.editLog.textContent=snippet;}
+    live.editLog.innerHTML=editStatusMarkup([{state:"done",text:"Request understood"},{state:"pending",text:"Writing compatible Luau blocks"},{state:"pending",text:"Encoding starts after the script is complete"}]);
   }else{
     live.label.innerHTML='<span class="think-dot"></span> '+provName(live.provider)+' is planning the build <span class="think-dot"></span>';
     setLiveExecution(live,"model","Understanding the request");
     live.content.innerHTML='<span class="live-summary">Reviewing the request and choosing a compatible script structure…</span><span class="live-cursor"></span>';
+    live.editLog.innerHTML=editStatusMarkup([{state:"pending",text:"Reading request details"},{state:"pending",text:"Selecting supported blocks"},{state:"pending",text:"Checking the best script structure"}]);
   }
   $id("aiLog").scrollTop=$id("aiLog").scrollHeight;
 }
