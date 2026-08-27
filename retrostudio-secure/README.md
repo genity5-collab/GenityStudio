@@ -1,121 +1,43 @@
-# RetroStudio Secure (Python + HTML)
+# RetroStudio Secure Service
 
-After the code-theft incident this version is served by a small FastAPI gateway.
+This is the Python 3/FastAPI service for the preserved RetroStudio page layout. The browser receives the UI template and non-sensitive interaction code only. Encoder authorization, AI-provider keys, Roblox search credentials, and Supabase service access remain on the server.
 
-## What changed for security
+## Authentication
 
-- HTML is **served by Python**, not a static public file that can be right-click → Save As easily in production.
-- Strong security headers: CSP, X-Frame-Options DENY, no-sniff, COOP, CORP, HSTS, no-store cache.
-- Rate limiting per IP.
-- `SUPABASE_URL` + publishable key come from **Render environment variables** and are injected at serve time when plaintext patterns exist (obfuscated builds keep fragments only).
-- **Never** put the service_role key in this repo or in the browser.
-- Same product features (Discord OAuth, local accounts, Free AI tokens, CoolFormat encoder, social, chat, themes).
-- Uses the **new obfuscated HTML** you provided (not the old static file).
+**Discord is the only active sign-in path.** The original password/username block is hidden because Supabase password authentication requires an email or phone identifier, and this application does not display or collect email. The server starts Discord OAuth with signed state and PKCE, then exchanges the callback code on the server for a short-lived HTTP-only session.
 
-## Deploy on Render
+Before testing Discord sign-in, configure the Discord provider in **Supabase Authentication → Providers** and add this exact callback URL in **Supabase Authentication → URL Configuration**:
 
-1. Connect this repo (root or set root directory to `retrostudio-secure` if the blueprint is used).
-2. Set environment variables (Dashboard → Environment):
-   - `SUPABASE_URL` = your project URL (**rotate after the theft**)
-   - `SUPABASE_ANON_KEY` = publishable / anon key only
-3. Deploy. The service starts with `uvicorn main:app`.
-
-## Supabase hardening you must do (Dashboard + SQL)
-
-### 1. Rotate keys immediately
-Project Settings → API → regenerate anon + service_role.  
-Update Render env vars. Never commit the new keys.
-
-### 2. Enable Google + Discord (Google first)
-Authentication → Providers:
-- Enable Google
-- Enable Discord
-Redirect URL must match your Render URL (and any custom domain).
-
-### 3. Max 1 account per Google identity (delete oldest)
-Run in SQL Editor:
-
-```sql
--- Example trigger sketch — adapt to your ACCOUNTS / auth.users mapping
-CREATE OR REPLACE FUNCTION public.enforce_one_google_account()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  google_sub text;
-  oldest_id uuid;
-BEGIN
-  -- extract Google subject from identities if present
-  SELECT identity_data->>'sub' INTO google_sub
-  FROM auth.identities
-  WHERE user_id = NEW.id AND provider = 'google'
-  LIMIT 1;
-
-  IF google_sub IS NULL THEN
-    RETURN NEW;
-  END IF;
-
-  -- find older accounts that share the same Google sub
-  SELECT u.id INTO oldest_id
-  FROM auth.users u
-  JOIN auth.identities i ON i.user_id = u.id
-  WHERE i.provider = 'google'
-    AND i.identity_data->>'sub' = google_sub
-    AND u.id <> NEW.id
-  ORDER BY u.created_at ASC
-  LIMIT 1;
-
-  IF oldest_id IS NOT NULL THEN
-    -- delete the oldest duplicate (cascades depend on your FKs)
-    DELETE FROM public."ACCOUNTS" WHERE user_id = oldest_id;
-    -- optional: delete auth user (requires service role / careful)
-    -- DELETE FROM auth.users WHERE id = oldest_id;
-  END IF;
-
-  RETURN NEW;
-END;
-$$;
-
--- Attach after you verify the logic on a staging project
--- CREATE TRIGGER trg_one_google
--- AFTER INSERT ON auth.users
--- FOR EACH ROW EXECUTE FUNCTION public.enforce_one_google_account();
+```text
+https://YOUR-RENDER-SERVICE.onrender.com/auth/callback
 ```
 
-Test thoroughly on a non-production project first.
+Set `PUBLIC_BASE_URL` to the same Render origin. The Discord client secret belongs in Supabase, not in Render or browser code.
 
-### 4. RLS checklist
-- Every table that the client touches has RLS **ON**.
-- Policies use `(select auth.uid()) = user_id` (or equivalent).
-- No `USING (true)` for authenticated data.
-- Storage buckets also have policies.
-- Edge Functions use the user JWT, never service_role in the client.
+## Render Environment
 
-### 5. Make the GitHub repo private
-Settings → Danger Zone → Change visibility → Private.  
-Attackers currently can clone the public repo.
+Set these only in Render’s encrypted Environment settings. Use `.env.example` as the complete variable list. All values stay server-side.
 
-## Local test
+| Variable | Purpose |
+|---|---|
+| `APP_SESSION_SECRET` | Signs application session cookies. |
+| `DEVICE_HASH_PEPPER` | Salts device-context hashes. |
+| `SUPABASE_URL` | Connected Supabase project URL. |
+| `SUPABASE_PUBLISHABLE_KEY` | Verifies Supabase user sessions. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Calls vetted private RPCs and writes audit events. |
+| `ROBLOX_API_KEY` or `ROBLOX_OPEN_CLOUD_API_KEY` | Exactly one server-only Roblox Creator Store key for RetroX. |
+| `AI_*_API_KEY` | Only provider keys you elect to enable. |
+
+## Local Validation
+
+Run the following from this folder:
 
 ```bash
-export SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-export SUPABASE_ANON_KEY=your_publishable_key
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+pytest -q
+python scripts/security_audit.py
+pip-audit -r requirements.txt
 ```
 
-Open http://127.0.0.1:8000
+The root repository files support existing Render services configured with a blank root directory. They use `python -m pip install -r requirements.txt` and `python -m uvicorn main:app --host 0.0.0.0 --port $PORT`.
 
-## Security verification (self-test results)
-- Headers present: CSP, X-Frame-Options DENY, nosniff, COOP/CORP, no-store, HSTS on HTTPS.
-- `/docs` and OpenAPI disabled.
-- Rate limit returns 429 after threshold.
-- No service_role anywhere.
-- Anon/publishable key is public by design (Supabase); real protection is RLS + rotation after theft.
-- Obfuscated HTML fragments of old project ref remain until you rotate keys.
-
-## Important limits
-Client-side JavaScript (encoder, UI) can always be extracted by a determined attacker who loads the page.  
-The Python layer raises the cost dramatically, hides secrets in env, adds headers + rate limits, and lets you proxy more logic later (e.g. Free AI, account deletion) entirely server-side.
+See [`SECURITY.md`](SECURITY.md) for the authority model, Supabase controls, and production prerequisites.

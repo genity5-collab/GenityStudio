@@ -34,13 +34,15 @@
     catch { show("#gate", true); show("#finishGate", false); show("#main", false); }
   }
   function installAuthentication() {
-    $("#discordBtn")?.addEventListener("click", () => { location.assign("/auth/login/discord"); });
-    $("#pwLoginBtn")?.addEventListener("click", async () => {
-      const email = $("#pwUsername")?.value.trim() || ""; const password = $("#pwPassword")?.value || "";
-      status("#pwSt", "Verifying secure session…");
-      try { await api("/auth/password", { method: "POST", body: JSON.stringify({ email, password }) }); renderSession(); }
-      catch (error) { status("#pwSt", `${error.code || "RS-AUTH"}: ${error.message}`, "err"); }
+    $("#discordBtn")?.addEventListener("click", () => {
+      const button = $("#discordBtn"); if (button) button.disabled = true;
+      show("#authMain", false); show("#authLoading", true); location.assign("/auth/login/discord");
     });
+    const passwordPanel = $("#pwAuthBox");
+    if (passwordPanel) {
+      passwordPanel.style.display = "none";
+      if (passwordPanel.previousElementSibling) passwordPanel.previousElementSibling.style.display = "none";
+    }
     $("#logoutBtn")?.addEventListener("click", async () => { try { await api("/auth/logout", { method: "POST", body: "{}" }); } finally { location.assign("/"); } });
   }
   function installEncoder() {

@@ -20,4 +20,7 @@
 - [x] Update vulnerable FastAPI and test dependency pins found by the release scan.
 - [x] Add authenticated safe-failure coverage for missing Render-only AI provider keys.
 - [ ] Enable Supabase Auth leaked-password protection in the Supabase Dashboard before accepting production password use.
+- [x] Remove the incompatible email-password handling and preserve Discord as the only active authentication flow.
+- [x] Add a signed state and PKCE verifier to the server-side Discord OAuth callback flow and return safe request-validation errors.
+- [ ] Configure the Discord provider and exact production callback URL in Supabase Auth, then complete a live Discord sign-in test.
 - [x] Explicitly disable retained social, profile, and admin controls that do not yet have a secure server-authoritative contract.

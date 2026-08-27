@@ -27,6 +27,8 @@ Set the following in Render, never in source files:
 | `PUBLIC_BASE_URL` | Yes in production | Exact approved Render origin for OAuth redirects. |
 | `CORS_ALLOWED_ORIGINS` | Yes in production | Comma-separated approved browser origins. |
 
+Discord OAuth has no application secret in Render. Configure Discord’s client credentials in Supabase Auth and set only the exact Render callback URL there. FastAPI stores a short-lived signed PKCE verifier server-side in an HTTP-only cookie and exchanges the authorization code from the callback, so OAuth access tokens never pass through browser JavaScript.
+
 ## Incident Response
 
 If a secret is exposed, first disable affected sensitive paths by removing or rotating the relevant Render secret. Rotate the credential at the original provider, revoke affected sessions in Supabase, inspect Render and Supabase logs, and redeploy from a known-good Git revision. Do not attempt to remediate an exposed secret only by deleting a file.

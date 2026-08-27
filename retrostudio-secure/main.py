@@ -25,7 +25,8 @@ from typing import Any, Literal
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -76,16 +77,6 @@ def settings() -> Settings:
         turnstile_secret=os.getenv("TURNSTILE_SECRET_KEY", "") or None,
         roblox_api_key=os.getenv("ROBLOX_OPEN_CLOUD_API_KEY", "") or os.getenv("ROBLOX_API_KEY", "") or None,
     )
-
-
-class PasswordRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, value: str) -> str:
-        return value.strip().lower()
 
 
 class EncoderRequest(BaseModel):
@@ -194,6 +185,11 @@ async def http_error_handler(_: Request, error: HTTPException) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=error.status_code)
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_: Request, __: RequestValidationError) -> JSONResponse:
+    return safe_error(422, "RS-VALIDATION-422", "Check the supplied information and try again.")
+
+
 @app.exception_handler(Exception)
 async def unknown_error_handler(_: Request, error: Exception) -> JSONResponse:
     trace_id = secrets.token_hex(8)
@@ -209,16 +205,49 @@ def b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def issue_session(user: dict[str, Any]) -> str:
-    config = settings()
-    if len(config.session_secret) < 32:
+def require_session_secret() -> str:
+    secret = settings().session_secret
+    if len(secret) < 32:
         raise HTTPException(status_code=503, detail={"code": "RS-CONFIG-503", "message": "Secure sessions are not configured."})
+    return secret
+
+
+def issue_oauth_ticket() -> tuple[str, str]:
+    secret = require_session_secret()
+    state = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(72)
+    payload = {"s": state, "v": verifier, "e": int(time.time()) + 600}
+    encoded = b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    return state, f"{encoded}.{b64url(signature)}"
+
+
+def parse_oauth_ticket(raw: str | None) -> dict[str, str] | None:
+    if not raw or "." not in raw:
+        return None
+    encoded, received = raw.rsplit(".", 1)
+    expected = b64url(hmac.new(require_session_secret().encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest())
+    if not hmac.compare_digest(received, expected):
+        return None
+    try:
+        payload = json.loads(b64url_decode(encoded))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or int(payload.get("e", 0)) <= int(time.time()):
+        return None
+    if not isinstance(payload.get("s"), str) or not isinstance(payload.get("v"), str):
+        return None
+    return {"state": payload["s"], "verifier": payload["v"]}
+
+
+def issue_session(user: dict[str, Any]) -> str:
+    secret = require_session_secret()
     subject = str(user.get("id", ""))
     if not re.fullmatch(r"[0-9a-f-]{36}", subject):
         raise HTTPException(status_code=401, detail={"code": "RS-AUTH-401", "message": "Unable to verify this session."})
     payload = {"sub": subject, "exp": int(time.time()) + 3600, "sid": secrets.token_urlsafe(18)}
     encoded = b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    signature = hmac.new(config.session_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
     return f"{encoded}.{b64url(signature)}"
 
 
@@ -241,6 +270,13 @@ def parse_session(raw: str | None) -> dict[str, Any] | None:
     if not re.fullmatch(r"[0-9a-f-]{36}", str(payload.get("sub", ""))):
         return None
     return payload
+
+
+def set_application_session(response: Response, user: dict[str, Any]) -> None:
+    secure = settings().production
+    response.set_cookie("rs_session", issue_session(user), httponly=True, secure=secure, samesite="lax", max_age=3600, path="/")
+    response.set_cookie("rs_csrf", secrets.token_urlsafe(32), httponly=False, secure=secure, samesite="lax", max_age=3600, path="/")
+    response.headers["Cache-Control"] = "private, no-store"
 
 
 def request_ip_key(request: Request) -> str:
@@ -477,47 +513,49 @@ async def oauth_login(provider: Literal["google", "discord"], request: Request) 
     public_base = config.public_base_url or str(request.base_url).rstrip("/")
     if config.production and not config.public_base_url:
         raise HTTPException(status_code=503, detail={"code": "RS-CONFIG-503", "message": "Secure sign-in is not configured."})
-    target = f"{config.supabase_url}/auth/v1/authorize?{urlencode({'provider': provider, 'redirect_to': public_base + '/auth/callback'})}"
-    return RedirectResponse(target, status_code=303)
+    state, ticket = issue_oauth_ticket()
+    verifier = parse_oauth_ticket(ticket)
+    assert verifier is not None
+    challenge = b64url(hashlib.sha256(verifier["verifier"].encode("utf-8")).digest())
+    target = f"{config.supabase_url}/auth/v1/authorize?{urlencode({'provider': provider, 'redirect_to': public_base + '/auth/callback', 'state': state, 'code_challenge': challenge, 'code_challenge_method': 'S256'})}"
+    response = RedirectResponse(target, status_code=303)
+    response.set_cookie("rs_oauth", ticket, httponly=True, secure=config.production, samesite="lax", max_age=600, path="/auth")
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
-@app.get("/auth/callback", response_class=HTMLResponse)
-async def oauth_callback() -> HTMLResponse:
-    return HTMLResponse('<!doctype html><title>Completing sign in</title><p>Completing secure sign in…</p><script src="/static/auth-callback.js" defer></script>')
-
-
-@app.post("/auth/session")
-async def create_session(payload: SessionExchangeRequest, response: Response) -> dict[str, bool]:
-    user = await verify_supabase_token(payload.access_token)
-    response.set_cookie("rs_session", issue_session(user), httponly=True, secure=settings().production, samesite="lax", max_age=3600, path="/")
-    response.set_cookie("rs_csrf", secrets.token_urlsafe(32), httponly=False, secure=settings().production, samesite="lax", max_age=3600, path="/")
-    await audit_event(str(user["id"]), "auth_session_created", None, None, {"method": "oauth_or_password"})
-    return {"ok": True}
-
-
-@app.post("/auth/password")
-async def password_login(payload: PasswordRequest, request: Request, response: Response) -> dict[str, bool]:
-    enforce_rate_limit(request, request_ip_key(request), "password", 5, 600)
+@app.get("/auth/callback")
+async def oauth_callback(request: Request) -> RedirectResponse:
+    ticket = parse_oauth_ticket(request.cookies.get("rs_oauth"))
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not ticket or not code or not state or not hmac.compare_digest(state, ticket["state"]):
+        response = RedirectResponse("/?auth_error=verification", status_code=303)
+        response.delete_cookie("rs_oauth", path="/auth")
+        return response
     config = require_supabase()
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             upstream = await client.post(
-                f"{config.supabase_url}/auth/v1/token?grant_type=password",
+                f"{config.supabase_url}/auth/v1/token?grant_type=pkce",
                 headers={"apikey": config.supabase_publishable_key or "", "Content-Type": "application/json"},
-                json={"email": payload.email, "password": payload.password},
+                json={"auth_code": code, "code_verifier": ticket["verifier"]},
             )
-        data = upstream.json()
+        body = upstream.json()
+        access_token = body.get("access_token") if isinstance(body, dict) else None
     except (httpx.RequestError, ValueError):
-        raise HTTPException(status_code=503, detail={"code": "RS-AUTH-503", "message": "Sign in is temporarily unavailable."}) from None
-    token = data.get("access_token") if isinstance(data, dict) else None
-    if upstream.status_code != 200 or not isinstance(token, str):
-        await audit_event(None, "auth_password_failed", None, None, {"source": "password"})
-        raise HTTPException(status_code=401, detail={"code": "RS-AUTH-401", "message": "Sign in could not be verified."})
-    user = await verify_supabase_token(token)
-    response.set_cookie("rs_session", issue_session(user), httponly=True, secure=settings().production, samesite="lax", max_age=3600, path="/")
-    response.set_cookie("rs_csrf", secrets.token_urlsafe(32), httponly=False, secure=settings().production, samesite="lax", max_age=3600, path="/")
-    await audit_event(str(user["id"]), "auth_password_succeeded", None, None, {"source": "password"})
-    return {"ok": True}
+        access_token = None
+        upstream = None
+    if upstream is None or upstream.status_code != 200 or not isinstance(access_token, str):
+        response = RedirectResponse("/?auth_error=discord", status_code=303)
+        response.delete_cookie("rs_oauth", path="/auth")
+        return response
+    user = await verify_supabase_token(access_token)
+    response = RedirectResponse("/", status_code=303)
+    set_application_session(response, user)
+    response.delete_cookie("rs_oauth", path="/auth")
+    await audit_event(str(user["id"]), "auth_discord_succeeded", None, None, {"method": "discord_pkce"})
+    return response
 
 
 @app.post("/auth/logout")

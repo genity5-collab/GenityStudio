@@ -1,11 +1,13 @@
 import os
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import main as retrostudio_server
 from main import app, issue_session, normalize_assets, parse_session, settings
 from private_encoder import encode_luau
 
@@ -96,3 +98,102 @@ def test_safe_bundle_explicitly_locks_actions_without_server_contracts():
     assert "data-secure-disabled" in bundle
     assert "#adminBanBtn" in bundle
     assert "#socialTabChat" in bundle
+
+
+def test_validation_errors_return_a_safe_stable_application_code():
+    response = TestClient(app).post("/api/retrox/assets/search", json={"keyword": ""})
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "RS-VALIDATION-422"
+
+
+def test_discord_login_starts_server_side_pkce_without_browser_secrets(monkeypatch):
+    monkeypatch.setenv("APP_SESSION_SECRET", "test-secret-with-at-least-thirty-two-characters")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable-test-key")
+
+    response = TestClient(app).get("/auth/login/discord", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "provider=discord" in response.headers["location"]
+    assert "code_challenge=" in response.headers["location"]
+    assert "rs_oauth=" in response.headers["set-cookie"]
+
+
+def test_password_auth_route_is_removed_for_discord_only_login():
+    response = TestClient(app).post("/auth/password", json={"email": "no@example.test", "password": "not-used-here"})
+
+    assert response.status_code == 404
+
+
+class FakeOAuthResponse:
+    def __init__(self, status_code, data):
+        self.status_code = status_code
+        self._data = data
+
+    def json(self):
+        return self._data
+
+
+class FakeOAuthClient:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, *args, **kwargs):
+        return self.response
+
+
+def configure_discord_oauth(monkeypatch):
+    monkeypatch.setenv("APP_SESSION_SECRET", "test-secret-with-at-least-thirty-two-characters")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable-test-key")
+
+
+def start_discord_oauth(client):
+    response = client.get("/auth/login/discord", follow_redirects=False)
+    return parse_qs(urlparse(response.headers["location"]).query)["state"][0]
+
+
+def test_discord_callback_exchanges_pkce_code_and_sets_http_only_session(monkeypatch):
+    configure_discord_oauth(monkeypatch)
+    client = TestClient(app)
+    state = start_discord_oauth(client)
+    monkeypatch.setattr(retrostudio_server.httpx, "AsyncClient", lambda **_: FakeOAuthClient(FakeOAuthResponse(200, {"access_token": "verified-token"})))
+
+    async def verified(_: str):
+        return {"id": USER_ID}
+
+    monkeypatch.setattr(retrostudio_server, "verify_supabase_token", verified)
+    response = client.get(f"/auth/callback?code=code-from-supabase&state={state}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert "rs_session=" in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"]
+
+
+def test_discord_callback_rejects_invalid_state_without_exchanging_code(monkeypatch):
+    configure_discord_oauth(monkeypatch)
+    client = TestClient(app)
+    start_discord_oauth(client)
+    response = client.get("/auth/callback?code=code-from-supabase&state=not-the-issued-state", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?auth_error=verification"
+
+
+def test_discord_callback_handles_failed_supabase_code_exchange_safely(monkeypatch):
+    configure_discord_oauth(monkeypatch)
+    client = TestClient(app)
+    state = start_discord_oauth(client)
+    monkeypatch.setattr(retrostudio_server.httpx, "AsyncClient", lambda **_: FakeOAuthClient(FakeOAuthResponse(400, {"error": "bad_code"})))
+    response = client.get(f"/auth/callback?code=expired-code&state={state}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?auth_error=discord"
