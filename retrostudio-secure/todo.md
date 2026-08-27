@@ -1,0 +1,23 @@
+# Project TODO
+
+- [x] Preserve the supplied RetroStudio HTML and existing application script as the application baseline.
+- [x] Add an Assets tab with keyword search and filtering for Image, Model, Decal, Mesh, and Audio assets.
+- [x] Route Roblox Creator Store asset requests through a server-only FastAPI endpoint.
+- [x] Normalize successful responses to exactly ten results with thumbnail, name, creator, asset ID, and asset type.
+- [x] Add accessible loading, empty, and credential-safe error states to the RetroX tab.
+- [x] Add rate limiting, security headers, and tests for exact-ten normalization and missing-credential safety.
+- [x] Add Render deployment configuration with `ROBLOX_OPEN_CLOUD_API_KEY` as a server-only secret.
+- [ ] Configure a fresh Roblox Open Cloud key with Creator Store search permission in Render and run a live image/model query. The supplied credential was not reused because it was exposed and rejected during validation.
+- [x] Preserve the RetroStudio screen layout while replacing browser-delivered behavior with a server-authoritative Python 3/FastAPI foundation.
+- [x] Limit live Roblox asset retrieval to the authenticated RetroX endpoint only.
+- [x] Add a server-authority Supabase migration that removes browser access to account authority, ledger, risk, security, and private encoder RPC operations.
+- [ ] Apply the server-authority Supabase migration to the connected GenityStudio project, configure Render secrets, and complete end-to-end production validation.
+- [x] Apply the server-authority Supabase migration to the connected GenityStudio project.
+- [x] Remove executable legacy client source from the served frontend while preserving the existing UI markup and styles.
+- [x] Add repeatable secret/private-source checks and Python dependency auditing in GitHub Actions.
+- [x] Move AI-provider selection and calls behind a rate-limited server-only FastAPI relay that never accepts browser-provided API keys.
+- [x] Move all configured AI-provider keys and the Roblox credential to documented Render-only variables; the browser can select a provider but cannot submit a secret.
+- [x] Update vulnerable FastAPI and test dependency pins found by the release scan.
+- [x] Add authenticated safe-failure coverage for missing Render-only AI provider keys.
+- [ ] Enable Supabase Auth leaked-password protection in the Supabase Dashboard before accepting production password use.
+- [x] Explicitly disable retained social, profile, and admin controls that do not yet have a secure server-authoritative contract.
