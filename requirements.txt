@@ -1,0 +1,1 @@
+-r retrostudio-secure/requirements.txt

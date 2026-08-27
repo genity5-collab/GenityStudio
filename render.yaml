@@ -23,6 +23,8 @@ services:
         sync: false
       - key: ROBLOX_OPEN_CLOUD_API_KEY
         sync: false
+      - key: ROBLOX_API_KEY
+        sync: false
       - key: AI_GEMINI_API_KEY
         sync: false
       - key: AI_OPENAI_API_KEY

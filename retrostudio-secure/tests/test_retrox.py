@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from main import app, issue_session, normalize_assets, parse_session
+from main import app, issue_session, normalize_assets, parse_session, settings
 from private_encoder import encode_luau
 
 
@@ -46,6 +46,13 @@ def test_authenticated_retrox_search_reports_missing_server_key_safely(monkeypat
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "RX-CONFIG-503"
     assert "ROBLOX_OPEN_CLOUD_API_KEY" not in response.text
+
+
+def test_render_roblox_compatibility_alias_is_server_only(monkeypatch):
+    monkeypatch.delenv("ROBLOX_OPEN_CLOUD_API_KEY", raising=False)
+    monkeypatch.setenv("ROBLOX_API_KEY", "server-only-test-value")
+
+    assert settings().roblox_api_key == "server-only-test-value"
 
 
 def test_authenticated_ai_request_reports_missing_server_key_safely(monkeypatch):

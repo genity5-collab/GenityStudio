@@ -74,7 +74,7 @@ def settings() -> Settings:
         public_base_url=os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or None,
         cors_origins=origins,
         turnstile_secret=os.getenv("TURNSTILE_SECRET_KEY", "") or None,
-        roblox_api_key=os.getenv("ROBLOX_OPEN_CLOUD_API_KEY", "") or None,
+        roblox_api_key=os.getenv("ROBLOX_OPEN_CLOUD_API_KEY", "") or os.getenv("ROBLOX_API_KEY", "") or None,
     )
 
 
