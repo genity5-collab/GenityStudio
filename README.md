@@ -12,7 +12,7 @@ New RetroStudio Encoder keeps the familiar RetroStudio page layout while serving
 
 ## Render
 
-Deploy with the root `render.yaml`, which uses `retrostudio-secure` as its Python 3 service root. If an existing Render service is configured at the repository root, the root `requirements.txt`, `main.py`, and `Procfile` provide a compatible fallback: `pip install -r requirements.txt` and `uvicorn main:app --host 0.0.0.0 --port $PORT`. Set every required variable from `retrostudio-secure/.env.example` in Render’s encrypted environment settings. Never add a secret to browser code, source control, or the build command.
+Deploy with the root `render.yaml`, which uses `retrostudio-secure` as its Python 3 service root. If an existing Render service is configured at the repository root, the root `requirements.txt`, `main.py`, and `Procfile` provide a compatible fallback: `python -m pip install -r requirements.txt` and `python -m uvicorn main:app --host 0.0.0.0 --port $PORT`. Module invocation prevents deployment shells from failing to locate `pip` or `uvicorn`. Set every required variable from `retrostudio-secure/.env.example` in Render’s encrypted environment settings. Never add a secret to browser code, source control, or the build command.
 
 For Roblox, the preferred variable is `ROBLOX_OPEN_CLOUD_API_KEY`. The server also accepts `ROBLOX_API_KEY` only as a compatibility alias for an existing Render service; configure **one** name, never both.
 
