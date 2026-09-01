@@ -2825,7 +2825,8 @@ function checkLocalData(){
 }
 
 /* Supabase auth state listener */
-dbg("onAuthStateChange: "+event); sb.auth.onAuthStateChange(async function(event,session){
+sb.auth.onAuthStateChange(async function(event,session){
+  dbg("onAuthStateChange: "+event);
   if(event==="SIGNED_OUT"||!session){
     _authProcessing=false;_authDone=false;
     SB_USER=null;SB_ACCT=null;SB_KEYS={};SB_CODER={count:0,week:getWeekNum()};SB_FREE={credits:FREE_DAILY_LIMIT,lastReset:Date.now(),lockoutUntil:0};
