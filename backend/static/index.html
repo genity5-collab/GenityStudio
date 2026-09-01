@@ -1874,8 +1874,15 @@ textarea.sm {
 .migrate-box strong { color: var(--ac); }
 .migrate-btn { margin-top: 8px; }
 .auth-loading {
-  display: flex; align-items: center; justify-content: center;
-  gap: 8px; padding: 20px; color: var(--mu); font-size: 0.8rem;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 40px 20px; color: var(--tx); font-size: 0.9rem;
+}
+.auth-loading .spinner {
+  width: 32px; height: 32px; border: 3px solid var(--bd);
+  border-top-color: var(--ac); border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+.auth-loading .step-text {
+  font-size: 0.72rem; color: var(--mu); margin-top: 4px;
 }
 .auth-loading .spinner {
   width: 18px; height: 18px; border: 2px solid var(--bd);
@@ -2000,6 +2007,10 @@ textarea.sm {
 <body>
 
 <button class="theme-btn" id="themeBtn">🌙 Dark</button>
+<div id="debugOverlay" style="display:none;position:fixed;top:0;left:0;right:0;background:#1a1a2e;color:#0f0;font-family:monospace;font-size:11px;padding:8px 12px;z-index:99999;border-bottom:1px solid #333;max-height:120px;overflow-y:auto;pointer-events:auto">
+<div id="debugLog" style="white-space:pre-wrap"></div>
+</div>
+<div id="authErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;background:#ef4444;color:#fff;padding:10px 16px;font-size:.8rem;z-index:99998;text-align:center;cursor:pointer" onclick="this.style.display='none'"></div>
 <div class="app">
 
 <!-- ============ LOGIN GATE ============ -->
@@ -2009,7 +2020,9 @@ textarea.sm {
 <p class="auth-tagline">Encoder · 76 Blocks · AI</p>
 <div id="authForm">
 <div id="authLoading" class="auth-loading" style="display:none">
-<div class="spinner"></div> Connecting to Discord...
+<div class="spinner"></div>
+<div>Connecting to Discord...</div>
+<div class="step-text" id="authStep">Please wait</div>
 </div>
 <div id="authMain">
 <button class="discord-btn" id="discordBtn">
@@ -2333,6 +2346,20 @@ We found your existing local account. After login, your data will be migrated au
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+function dbg(msg){
+  try{
+    var dl=document.getElementById("debugLog");
+    if(dl){
+      var ts=new Date().toLocaleTimeString();
+      dl.innerHTML="["+ts+"] "+msg+"\n"+dl.innerHTML;
+      document.getElementById("debugOverlay").style.display="block";
+    }
+    console.log("[AUTH]",msg);
+  }catch(e){}
+}
+window.dbg=dbg;
+</script>
+<script>
 
 
 (function(){
@@ -2389,7 +2416,7 @@ setTimeout(function(){
     var authLoadingStuck=authLoading&&authLoading.style.display!=="none"&&!_authDone;
     var nothingVisible=!gateVisible&&!mainVisible&&!finishVisible;
     if(nothingVisible||authLoadingStuck){
-      console.warn("Safety net: stuck after 5s, restoring login gate.");
+      dbg("SAFETY NET: stuck after 3s, restoring login gate!"); console.warn("Safety net: stuck after 5s, restoring login gate.");
       _authProcessing=false;_authDone=false;
       /* Remove any dynamically created link gates */
       var lpg2=$id("linkPassGate");if(lpg2&&lpg2.parentNode)lpg2.parentNode.removeChild(lpg2);
@@ -2403,7 +2430,7 @@ setTimeout(function(){
       if(nothingVisible)setSt("gateSt","Something went wrong loading your session. Please try logging in again.",false);
     }
   }catch(e){console.error("Safety net error:",e);}
-},5000);
+},3000);
 function getRedirectUrl(){
   try{
     var o=window.location.origin;
@@ -2518,11 +2545,13 @@ function updateProfilePreview(){
 /* === LOAD ACCOUNT (Supabase or Local) === */
 /* === SUPABASE AUTH (Discord) === */
 async function sbLoad(){
+  dbg("sbLoad: SB_USER="+(SB_USER?"yes":"no"));
   if(!SB_USER)return false;
   isLocalMode=false;
   try{
     /* Use backend proxy to bypass RLS lockdown on ACCOUNTS table */
-    var data=await apiAccountGet();
+    dbg("sbLoad: calling apiAccountGet..."); var data=await apiAccountGet();
+    dbg("sbLoad: got data="+JSON.stringify(data?Object.keys(data):"null"));
     if(data){
       SB_ACCT=data;
       SB_KEYS=SB_ACCT.api_keys||{};
@@ -2538,7 +2567,7 @@ async function sbLoad(){
       return true;
     }
     return false;
-  }catch(e){console.warn("sbLoad error:",e.message);return false;}
+  }catch(e){dbg("SBLOAD ERROR: "+e.message); console.warn("sbLoad error:",e.message);return false;}
 }
 
 function tryMigrateLocal(){
@@ -2745,6 +2774,7 @@ function updateDash(){
 
 /* === SHOW MAIN (fixed element refs) === */
 function showMain(name){
+  dbg("showMain called with: "+name);
   try{
   var g=$id("gate");if(g)g.style.display="none";
   var fg=$id("finishGate");if(fg)fg.style.display="none";
@@ -2795,7 +2825,7 @@ function checkLocalData(){
 }
 
 /* Supabase auth state listener */
-sb.auth.onAuthStateChange(async function(event,session){
+dbg("onAuthStateChange: "+event); sb.auth.onAuthStateChange(async function(event,session){
   if(event==="SIGNED_OUT"||!session){
     _authProcessing=false;_authDone=false;
     SB_USER=null;SB_ACCT=null;SB_KEYS={};SB_CODER={count:0,week:getWeekNum()};SB_FREE={credits:FREE_DAILY_LIMIT,lastReset:Date.now(),lockoutUntil:0};
@@ -2806,7 +2836,7 @@ sb.auth.onAuthStateChange(async function(event,session){
     var db=$id("discordBtn");if(db){db.disabled=false;db.innerHTML='<svg viewBox="0 0 24 24" fill="white"><path d="M19.27 5.33C17.94 4.71 16.5 4.26 15 4a.09.09 0 0 0-.07.03c-.18.33-.39.76-.53 1.09a16.09 16.09 0 0 0-4.8 0c-.14-.34-.35-.76-.54-1.09a.1.1 0 0 0-.07-.03c-1.5.26-2.93.71-4.27 1.33a.07.07 0 0 0-.03.03C2 9.46 1.27 13.46 1.62 17.42a.08.08 0 0 0 .03.05c1.78 1.31 3.5 2.1 5.19 2.63a.1.1 0 0 0 .1-.03c.4-.55.76-1.13 1.07-1.74a.1.1 0 0 0-.05-.13c-.57-.22-1.12-.48-1.64-.79a.09.09 0 0 1-.01-.15c.11-.08.22-.17.33-.25a.09.09 0 0 1 .08-.01c3.44 1.57 7.15 1.57 10.55 0a.09.09 0 0 1 .08.01c.11.09.22.17.33.26a.09.09 0 0 1-.01.15c-.52.31-1.07.57-1.64.79a.09.09 0 0 0-.05.13c.32.61.68 1.19 1.07 1.74a.09.09 0 0 0 .1.03c1.7-.53 3.42-1.32 5.2-2.63a.08.08 0 0 0 .03-.05c.41-4.58-.69-8.55-2.92-12.06a.07.07 0 0 0-.03-.03zM8.52 15.04c-1.03 0-1.88-.95-1.88-2.11s.83-2.11 1.88-2.11 1.9.95 1.88 2.11c0 1.16-.84 2.11-1.88 2.11zm6.97 0c-1.03 0-1.88-.95-1.88-2.11s.83-2.11 1.88-2.11 1.9.95 1.88 2.11c0 1.16-.84 2.11-1.88 2.11z"/></svg>Login with Discord';}
     return;
   }
-  if(event==="INITIAL_SESSION"||event==="SIGNED_IN"||event==="TOKEN_REFRESHED"){
+  dbg("Auth event: "+event); if(event==="INITIAL_SESSION"||event==="SIGNED_IN"||event==="TOKEN_REFRESHED"){
     if(_authProcessing)return;
     if(_authDone){
       /* Already logged in — just enter the app */
@@ -2823,20 +2853,22 @@ sb.auth.onAuthStateChange(async function(event,session){
     }
     _authProcessing=true;
     SB_USER=session.user;
+    dbg("User: "+(session.user?session.user.id:"none"));
     var al=$id("authLoading");if(al)al.style.display="flex";
+    var st=$id("authStep");if(st)st.textContent="Loading account...";
     var am=$id("authMain");if(am)am.style.display="none";
     try{
-      var ok=await sbLoad();
-      _authProcessing=false;
-      if(ok){_authDone=true;handlePostAuth();}
+      dbg("sbLoad starting..."); var ok=await sbLoad();
+      dbg("sbLoad result: "+ok); _authProcessing=false;
+      if(ok){_authDone=true;dbg("Calling handlePostAuth...");handlePostAuth();}
       else{
         var al2=$id("authLoading");if(al2)al2.style.display="none";
         var am2=$id("authMain");if(am2)am2.style.display="block";
         var g2=$id("gate");if(g2)g2.style.display="block";
-        setSt("gateSt","Failed to load account. Try again.",false);
+        setSt("gateSt","Failed to load account. Try again.",false); var eb=$id("authErrorBanner");if(eb){eb.textContent="Failed to load account. The backend may be starting up — try again in a moment.";eb.style.display="block";}
       }
     }catch(e){
-      console.warn("auth error:",e);_authProcessing=false;
+      dbg("AUTH ERROR: "+e.message); console.warn("auth error:",e);_authProcessing=false;
       var al3=$id("authLoading");if(al3)al3.style.display="none";
       /* Don't override if main is already shown (showMain succeeded but threw after) */
       var mTest=$id("main");
@@ -2845,7 +2877,7 @@ sb.auth.onAuthStateChange(async function(event,session){
       }else{
         var am3=$id("authMain");if(am3)am3.style.display="block";
         var g3=$id("gate");if(g3)g3.style.display="block";
-        setSt("gateSt","Error: "+e.message,false);
+        setSt("gateSt","Error: "+e.message,false); var eb=$id("authErrorBanner");if(eb){eb.textContent="Error: "+e.message;eb.style.display="block";}
       }
     }
   }
@@ -2860,17 +2892,17 @@ sb.auth.getSession().then(async function(s){
     var al=$id("authLoading");if(al)al.style.display="flex";
     var am=$id("authMain");if(am)am.style.display="none";
     try{
-      var ok=await sbLoad();
-      _authProcessing=false;
-      if(ok){_authDone=true;handlePostAuth();}
+      dbg("sbLoad starting..."); var ok=await sbLoad();
+      dbg("sbLoad result: "+ok); _authProcessing=false;
+      if(ok){_authDone=true;dbg("Calling handlePostAuth...");handlePostAuth();}
       else{
         var al2=$id("authLoading");if(al2)al2.style.display="none";
         var am2=$id("authMain");if(am2)am2.style.display="block";
         var g2=$id("gate");if(g2)g2.style.display="block";
-        setSt("gateSt","Failed to load account. Try again.",false);
+        setSt("gateSt","Failed to load account. Try again.",false); var eb=$id("authErrorBanner");if(eb){eb.textContent="Failed to load account. The backend may be starting up — try again in a moment.";eb.style.display="block";}
       }
     }catch(e){
-      console.warn("session check error:",e);_authProcessing=false;
+      dbg("SESSION ERROR: "+e.message); console.warn("session check error:",e);_authProcessing=false;
       var al3=$id("authLoading");if(al3)al3.style.display="none";
       var mTest=$id("main");
       if(mTest&&mTest.style.display==="block"&&_authDone){
@@ -2878,7 +2910,7 @@ sb.auth.getSession().then(async function(s){
       }else{
         var am3=$id("authMain");if(am3)am3.style.display="block";
         var g3=$id("gate");if(g3)g3.style.display="block";
-        setSt("gateSt","Error: "+e.message,false);
+        setSt("gateSt","Error: "+e.message,false); var eb=$id("authErrorBanner");if(eb){eb.textContent="Error: "+e.message;eb.style.display="block";}
       }
     }
   }
@@ -2917,6 +2949,7 @@ function hasDisplayName(){
 
 /* Main post-auth router — simplified, no blocking gates */
 function handlePostAuth(){
+  dbg("handlePostAuth: hasDisplayName="+hasDisplayName());
   /* Only blocking step: new users must set display name + known_as */
   if(!hasDisplayName()){
     showFinishGate();
@@ -3037,6 +3070,7 @@ $id("discordBtn").onclick=function(){
 /* === FINISH ACCOUNT FLOW === */
 var SB_NEW_ACCOUNT=false;
 function showFinishGate(){
+  dbg("showFinishGate called");
   var g=$id("gate");if(g)g.style.display="none";
   var lpg=$id("linkPassGate");if(lpg&&lpg.parentNode)lpg.parentNode.removeChild(lpg);
   var ldg=$id("linkDiscordGate");if(ldg&&ldg.parentNode)ldg.parentNode.removeChild(ldg);
