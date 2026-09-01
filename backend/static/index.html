@@ -2863,8 +2863,24 @@ sb.auth.onAuthStateChange(async function(event,session){
     var am=$id("authMain");if(am)am.style.display="none";
     try{
       dbg("sbLoad starting..."); var ok=await sbLoad();
-      dbg("sbLoad result: "+ok); _authProcessing=false; window.dbg("sbLoad done, ok="+ok+" authDone="+_authDone);
-      if(ok){_authDone=true;dbg("Calling handlePostAuth...");handlePostAuth();}
+      dbg("sbLoad result: "+ok); _authProcessing=false;
+      window.dbg("sbLoad done, ok="+ok);
+      if(ok){
+        _authDone=true;
+        window.dbg("scheduling handlePostAuth via setTimeout...");
+        setTimeout(function(){
+          try{
+            window.dbg("handlePostAuth setTimeout fired, calling now...");
+            handlePostAuth();
+          }catch(e4){
+            window.dbg("HANDLEPOSTAUTH CRASHED: "+(e4&&e4.message?e4.message:e4));
+            /* Fallback: force main visible so user isn't stuck on black screen */
+            var mF=$id("main");if(mF)mF.style.display="block";
+            var gF=$id("gate");if(gF)gF.style.display="none";
+            var alF=$id("authLoading");if(alF)alF.style.display="none";
+          }
+        },10);
+      }
       else{
         var al2=$id("authLoading");if(al2)al2.style.display="none";
         var am2=$id("authMain");if(am2)am2.style.display="block";
@@ -2898,7 +2914,21 @@ sb.auth.getSession().then(async function(s){
     try{
       dbg("sbLoad starting..."); var ok=await sbLoad();
       dbg("sbLoad result: "+ok); _authProcessing=false;
-      if(ok){_authDone=true;dbg("Calling handlePostAuth...");handlePostAuth();}
+      window.dbg("sbLoad(getSession path) done, ok="+ok);
+      if(ok){
+        _authDone=true;
+        setTimeout(function(){
+          try{
+            window.dbg("handlePostAuth (getSession path) firing...");
+            handlePostAuth();
+          }catch(e4){
+            window.dbg("HANDLEPOSTAUTH CRASHED (getSession path): "+(e4&&e4.message?e4.message:e4));
+            var mF=$id("main");if(mF)mF.style.display="block";
+            var gF=$id("gate");if(gF)gF.style.display="none";
+            var alF=$id("authLoading");if(alF)alF.style.display="none";
+          }
+        },10);
+      }
       else{
         var al2=$id("authLoading");if(al2)al2.style.display="none";
         var am2=$id("authMain");if(am2)am2.style.display="block";
@@ -4719,7 +4749,7 @@ $id("zeroTokensClose").onclick=function(){$id("zeroTokensModal").style.display="
 <script>
 // Make dbg() show visible output
 (function(){
-  var origDbg = window.dbg;
+  // Cap debugLog size to prevent huge DOM/string bloat on long sessions
   window.dbg = function(msg){
     try {
       var dl = document.getElementById("debugLog");
@@ -4727,11 +4757,19 @@ $id("zeroTokensClose").onclick=function(){$id("zeroTokensModal").style.display="
         var ts = new Date().toLocaleTimeString();
         dl.innerHTML = "["+ts+"] "+msg+"\n" + dl.innerHTML;
         document.getElementById("debugOverlay").style.display = "block";
+        // Trim to last ~4000 chars to prevent runaway growth
+        if(dl.innerHTML.length>4000) dl.innerHTML=dl.innerHTML.substring(0,4000);
       }
     } catch(e){}
-    if(origDbg) try{origDbg(msg);}catch(e){}
     console.log("[AUTH]", msg);
   };
+  // CRITICAL: catch any otherwise-silent errors and show them in the debug overlay
+  window.addEventListener("error", function(ev){
+    try{ window.dbg("WINDOW ERROR: "+(ev.message||ev.error)+" at "+(ev.filename||"?")+":"+(ev.lineno||"?")); }catch(e){}
+  });
+  window.addEventListener("unhandledrejection", function(ev){
+    try{ window.dbg("UNHANDLED PROMISE REJECTION: "+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason)); }catch(e){}
+  });
 })();
 
 // ULTIMATE FAILSAFE: Check every 500ms for black screen, and if detected, show debug + restore gate
