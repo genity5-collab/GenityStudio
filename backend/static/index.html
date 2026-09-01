@@ -2016,17 +2016,8 @@ textarea.sm {
 <svg viewBox="0 0 24 24" fill="white"><path d="M19.27 5.33C17.94 4.71 16.5 4.26 15 4a.09.09 0 0 0-.07.03c-.18.33-.39.76-.53 1.09a16.09 16.09 0 0 0-4.8 0c-.14-.34-.35-.76-.54-1.09a.1.1 0 0 0-.07-.03c-1.5.26-2.93.71-4.27 1.33a.07.07 0 0 0-.03.03C2 9.46 1.27 13.46 1.62 17.42a.08.08 0 0 0 .03.05c1.78 1.31 3.5 2.1 5.19 2.63a.1.1 0 0 0 .1-.03c.4-.55.76-1.13 1.07-1.74a.1.1 0 0 0-.05-.13c-.57-.22-1.12-.48-1.64-.79a.09.09 0 0 1-.01-.15c.11-.08.22-.17.33-.25a.09.09 0 0 1 .08-.01c3.44 1.57 7.15 1.57 10.55 0a.09.09 0 0 1 .08.01c.11.09.22.17.33.26a.09.09 0 0 1-.01.15c-.52.31-1.07.57-1.64.79a.09.09 0 0 0-.05.13c.32.61.68 1.19 1.07 1.74a.09.09 0 0 0 .1.03c1.7-.53 3.42-1.32 5.2-2.63a.08.08 0 0 0 .03-.05c.41-4.58-.69-8.55-2.92-12.06a.07.07 0 0 0-.03-.03zM8.52 15.04c-1.03 0-1.88-.95-1.88-2.11s.83-2.11 1.88-2.11 1.9.95 1.88 2.11c0 1.16-.84 2.11-1.88 2.11zm6.97 0c-1.03 0-1.88-.95-1.88-2.11s.83-2.11 1.88-2.11 1.9.95 1.88 2.11c0 1.16-.84 2.11-1.88 2.11z"/></svg>
 Login with Discord
 </button>
-<div style="display:flex;align-items:center;gap:8px;margin:14px 0;color:var(--mu);font-size:.7rem">
-<div style="flex:1;height:1px;background:var(--bd)"></div>OR<div style="flex:1;height:1px;background:var(--bd)"></div>
-</div>
-<div id="pwAuthBox">
-<input id="pwUsername" placeholder="Username" maxlength="24" autocomplete="username"/>
-<input id="pwPassword" type="password" placeholder="Password" maxlength="64" autocomplete="current-password" style="margin-top:8px"/>
-<button class="btn" id="pwLoginBtn" style="margin-top:8px;width:100%">Log In</button>
-<div style="display:flex;justify-content:center;margin-top:8px;font-size:.72rem;color:var(--mu)">
-No account? <a href="#" id="pwSwitchToSignup" style="color:var(--ac);margin-left:4px">Sign up</a>
-</div>
-<div class="st" id="pwSt" style="text-align:center;margin-top:4px"></div>
+<div style="margin-top:16px;text-align:center;font-size:.72rem;color:var(--mu)">
+New here? Just click <strong style="color:var(--ac)">Login with Discord</strong> above — your account is created automatically.
 </div>
 <div id="migrateSection" style="display:none">
 <div class="migrate-box">
@@ -2037,7 +2028,7 @@ We found your existing local account. After login, your data will be migrated au
 <div class="auth-terms" style="margin-top:14px">
 <div class="terms-text">
 <p>• API key stored securely, sent directly to AI providers.</p>
-<p>• Auth powered by Discord OAuth via Supabase.</p>
+<p>• Discord-only authentication. No email or password needed.</p>
 <p>• Your data is synced to your Discord account.</p>
 </div>
 </div>
@@ -2422,7 +2413,6 @@ function getRedirectUrl(){
 }
 var SB_USER=null,SB_ACCT=null;var _authProcessing=false,_authDone=false;
 var SB_KEYS={},SB_CODER=null,SB_FREE=null,SB_SETTINGS={};
-var authMode="signup";
 var isLocalMode=true;
 var LOCAL_ACCT=null;
 var FREE_DAILY_LIMIT=5;
@@ -3035,63 +3025,6 @@ function showLinkDiscordGate(){
     setSt("linkDiscordSt","");
   }
 }
-
-/* === PASSWORD AUTH (Username + Password, no email/phone) === */
-var PW_DOMAIN="@retrostudio.local"; // synthetic email domain for Supabase password auth
-var pwMode="login"; // "login" or "signup"
-function pwEmailFor(username){
-  return username.toLowerCase().replace(/[^a-z0-9_]/g,"")+PW_DOMAIN;
-}
-function updatePwUi(){
-  var btn=$id("pwLoginBtn");
-  var switchLink=$id("pwSwitchToSignup");
-  if(pwMode==="signup"){
-    if(btn)btn.textContent="Sign Up";
-    if(switchLink)switchLink.textContent="Log in instead";
-  }else{
-    if(btn)btn.textContent="Log In";
-    if(switchLink)switchLink.textContent="Sign up";
-  }
-}
-var swLink=$id("pwSwitchToSignup");
-if(swLink)swLink.onclick=function(e){
-  e.preventDefault();
-  pwMode=(pwMode==="signup")?"login":"signup";
-  updatePwUi();
-  setSt("pwSt","",null);
-};
-var pwBtn=$id("pwLoginBtn");
-if(pwBtn)pwBtn.onclick=async function(){
-  var uname=($id("pwUsername").value||"").trim();
-  var pass=($id("pwPassword").value||"").trim();
-  if(!uname||uname.length<3){setSt("pwSt","Username must be at least 3 characters",false);return;}
-  if(!/^[a-zA-Z0-9_]+$/.test(uname)){setSt("pwSt","Username: letters, numbers, underscore only",false);return;}
-  if(!pass||pass.length<6){setSt("pwSt","Password must be at least 6 characters",false);return;}
-  var email=pwEmailFor(uname);
-  pwBtn.disabled=true;pwBtn.textContent="Please wait...";
-  setSt("pwSt","",null);
-  try{
-    var res;
-    if(pwMode==="signup"){
-      res=await sb.auth.signUp({email:email,password:pass,options:{data:{user_name:uname,full_name:uname}}});
-    }else{
-      res=await sb.auth.signInWithPassword({email:email,password:pass});
-    }
-    if(res.error){
-      var msg=res.error.message||"Authentication failed";
-      if(/already registered|already exists/i.test(msg))msg="That username is taken. Try logging in instead.";
-      if(/invalid login credentials/i.test(msg))msg="Wrong username or password.";
-      setSt("pwSt",msg,false);
-      pwBtn.disabled=false;updatePwUi();
-      return;
-    }
-    // onAuthStateChange / getSession watcher will pick up the new session automatically
-    setSt("pwSt","Success! Loading your account...",true);
-  }catch(e){
-    setSt("pwSt","Error: "+e.message,false);
-    pwBtn.disabled=false;updatePwUi();
-  }
-};
 
 /* Discord button handler */
 $id("discordBtn").onclick=function(){
