@@ -2751,7 +2751,7 @@ function updateDash(){
 }
 
 /* === SHOW MAIN (fixed element refs) === */
-function showMain(name){
+function showMain(name){ window.dbg("showMain ENTER: name="+name); var asb=document.getElementById("authStatusBar"); if(asb)asb.style.display="none";
   dbg("showMain called with: "+name);
   try{
   var g=$id("gate");if(g)g.style.display="none";
@@ -2858,18 +2858,18 @@ sb.auth.onAuthStateChange(async function(event,session){
     _authProcessing=true;
     SB_USER=session.user;
     dbg("User: "+(session.user?session.user.id:"none"));
-    var al=$id("authLoading");if(al)al.style.display="flex";
+    var al=$id("authLoading");if(al)al.style.display="flex"; window.dbg("authLoading SHOWN, calling sbLoad..."); var asb=document.getElementById("authStatusBar"); if(asb){asb.style.display="block";document.getElementById("authStatusText").textContent="Loading account...";}
     var st=$id("authStep");if(st)st.textContent="Loading account...";
     var am=$id("authMain");if(am)am.style.display="none";
     try{
       dbg("sbLoad starting..."); var ok=await sbLoad();
-      dbg("sbLoad result: "+ok); _authProcessing=false;
+      dbg("sbLoad result: "+ok); _authProcessing=false; window.dbg("sbLoad done, ok="+ok+" authDone="+_authDone);
       if(ok){_authDone=true;dbg("Calling handlePostAuth...");handlePostAuth();}
       else{
         var al2=$id("authLoading");if(al2)al2.style.display="none";
         var am2=$id("authMain");if(am2)am2.style.display="block";
         var g2=$id("gate");if(g2)g2.style.display="block";
-        setSt("gateSt","Failed to load account. Try again.",false); var eb=$id("authErrorBanner");if(eb){eb.textContent="Failed to load account. The backend may be starting up — try again in a moment.";eb.style.display="block";}
+        setSt("gateSt","Failed to load account. Try again.",false); var asb=document.getElementById("authStatusBar"); if(asb){asb.style.display="block";asb.style.background="#ef4444";document.getElementById("authStatusText").textContent="Failed to load account - tap to retry";} var eb=$id("authErrorBanner");if(eb){eb.textContent="Failed to load account. The backend may be starting up — try again in a moment.";eb.style.display="block";}
       }
     }catch(e){
       dbg("AUTH ERROR: "+e.message); console.warn("auth error:",e);_authProcessing=false;
@@ -2952,7 +2952,7 @@ function hasDisplayName(){
 }
 
 /* Main post-auth router — simplified, no blocking gates */
-function handlePostAuth(){
+function handlePostAuth(){ window.dbg("handlePostAuth ENTER");
   dbg("handlePostAuth: hasDisplayName="+hasDisplayName());
   /* Only blocking step: new users must set display name + known_as */
   if(!hasDisplayName()){
@@ -3073,7 +3073,7 @@ $id("discordBtn").onclick=function(){
 
 /* === FINISH ACCOUNT FLOW === */
 var SB_NEW_ACCOUNT=false;
-function showFinishGate(){
+function showFinishGate(){ window.dbg("showFinishGate ENTER"); var asb=document.getElementById("authStatusBar"); if(asb)asb.style.display="none";
   dbg("showFinishGate called");
   var g=$id("gate");if(g)g.style.display="none";
   var lpg=$id("linkPassGate");if(lpg&&lpg.parentNode)lpg.parentNode.removeChild(lpg);
@@ -4705,5 +4705,64 @@ $id("zeroTokensClose").onclick=function(){$id("zeroTokensModal").style.display="
 })();
 
 </script>
+
+
+<!-- VISIBLE AUTH STATUS BAR -->
+<div id="authStatusBar" style="display:none;position:fixed;top:0;left:0;right:0;background:#5b8cff;color:#fff;text-align:center;padding:8px;font-size:12px;font-weight:600;z-index:99998;transition:opacity 0.3s;">
+<span id="authStatusText">Loading...</span>
+</div>
+
+<!-- VISIBLE DEBUG OVERLAY -->
+<div id="debugOverlay" style="display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#000;color:#0f0;font-family:monospace;font-size:10px;padding:8px;z-index:99999;border-top:2px solid #0f0;white-space:pre-wrap;">
+<div id="debugLog"></div>
+</div>
+<script>
+// Make dbg() show visible output
+(function(){
+  var origDbg = window.dbg;
+  window.dbg = function(msg){
+    try {
+      var dl = document.getElementById("debugLog");
+      if(dl){
+        var ts = new Date().toLocaleTimeString();
+        dl.innerHTML = "["+ts+"] "+msg+"\n" + dl.innerHTML;
+        document.getElementById("debugOverlay").style.display = "block";
+      }
+    } catch(e){}
+    if(origDbg) try{origDbg(msg);}catch(e){}
+    console.log("[AUTH]", msg);
+  };
+})();
+
+// ULTIMATE FAILSAFE: Check every 500ms for black screen, and if detected, show debug + restore gate
+setInterval(function(){
+  try {
+    var gate = document.getElementById("gate");
+    var main = document.getElementById("main");
+    var finish = document.getElementById("finishGate");
+    var authLoading = document.getElementById("authLoading");
+    
+    var gateVis = gate && gate.style.display !== "none";
+    var mainVis = main && main.style.display === "block";
+    var finishVis = finish && finish.style.display === "block";
+    var loadingVis = authLoading && authLoading.style.display !== "none";
+    
+    var anyVisible = gateVis || mainVis || finishVis || loadingVis;
+    
+    if(!anyVisible){
+      // BLACK SCREEN DETECTED — force show debug overlay
+      document.getElementById("debugOverlay").style.display = "block";
+      window.dbg("BLACK SCREEN DETECTED! gate="+gateVis+" main="+mainVis+" finish="+finishVis+" loading="+loadingVis+" authDone="+window._authDone+" authProcessing="+window._authProcessing);
+      
+      // Try to restore gate
+      if(gate) gate.style.display = "block";
+      if(authLoading) authLoading.style.display = "none";
+      var am = document.getElementById("authMain");
+      if(am) am.style.display = "block";
+    }
+  } catch(e){}
+}, 500);
+</script>
+
 </body>
 </html>
