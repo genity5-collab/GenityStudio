@@ -2801,8 +2801,33 @@ function showMain(name){
   try{if(typeof updateFreeCreditsBar==="function")updateFreeCreditsBar();}catch(e){}
   }catch(e){console.warn("showMain error:",e);}
   /* Final safety: ensure main is visible no matter what */
-  var m2=$id("main");if(m2){m2.style.display="block";m2.style.opacity="1";}
+  var m2=$id("main");if(m2){m2.style.display="block";m2.style.opacity="1";m2.style.visibility="visible";}
   var g2=$id("gate");if(g2)g2.style.display="none";
+  /* Post-showMain visibility check */
+  setTimeout(function(){
+    try{
+      var m3=$id("main");
+      if(m3){
+        var cs=window.getComputedStyle(m3);
+        var isVisible=cs.display!=="none"&&cs.visibility!=="hidden"&&parseFloat(cs.opacity)>0;
+        dbg("Post-showMain check: display="+cs.display+" visibility="+cs.visibility+" opacity="+cs.opacity+" visible="+isVisible);
+        if(!isVisible){
+          dbg("WARNING: #main not visible after showMain! Forcing...");
+          m3.style.cssText="display:block;opacity:1;visibility:visible;";
+        }
+        /* Also check if panelAi is visible */
+        var pa=$id("panelAi");
+        if(pa){
+          var pcs=window.getComputedStyle(pa);
+          dbg("panelAi: display="+pcs.display);
+          if(pcs.display==="none"){
+            dbg("WARNING: panelAi hidden! Adding active class...");
+            pa.classList.add("active");
+          }
+        }
+      }
+    }catch(e){dbg("Visibility check error: "+e.message);}
+  },100);
 }
 
 /* === DISCORD OAUTH === */
