@@ -1,28 +1,66 @@
-# New RetroStudio Encoder
+# RetroStudio — Secure Luau Encoder & AI
 
-New RetroStudio Encoder keeps the familiar RetroStudio page layout while serving it through a **Python 3/FastAPI** backend. The browser receives only safe presentation and interaction code. Encoder authorization, token settlement, risk handling, audit logging, and Roblox credentials stay on the server and use the connected Supabase project’s private functions.
+Production-grade Luau-to-CoolFormat encoder with server-authoritative architecture.
 
-| Route | Security role |
-|---|---|
-| `POST /api/encoder/encode` | Authenticated, CSRF-protected server-side encoder execution with Supabase authorization and finalization. |
-| `POST /api/retrox/assets/search` | The only authenticated path that may use the server-only Roblox Creator Store credential. Returns exactly ten usable assets. |
-| `GET /auth/login/{google|discord}` | Starts a Supabase-hosted OAuth flow using approved redirect URLs. |
-| `POST /auth/password` | Retains password sign-in via server-side Supabase validation and rate limits. |
-| `GET /health` | Minimal deployment health response; exposes no secret state. |
+## Architecture
 
-## Render
+- **Backend**: FastAPI (Python) with private encoder, Supabase auth gateway, Cloudflare Turnstile, rate limiting
+- **Frontend**: React + Vite + Tailwind CSS + shadcn/ui
+- **Database**: Supabase (PostgreSQL) with row-level security
+- **Auth**: Discord OAuth + Google OAuth (Supabase Auth)
+- **AI**: Free AI via Groq (gpt-oss-20b) — 5 credits per 48 hours
+- **Deployment**: Render (Python web service + static site)
 
-Deploy with the root `render.yaml`, which uses `retrostudio-secure` as its Python 3 service root. If an existing Render service is configured at the repository root, the root `requirements.txt`, `main.py`, and `Procfile` provide a compatible fallback: `python -m pip install -r requirements.txt` and `python -m uvicorn main:app --host 0.0.0.0 --port $PORT`. Module invocation prevents deployment shells from failing to locate `pip` or `uvicorn`. Set every required variable from `retrostudio-secure/.env.example` in Render’s encrypted environment settings. Never add a secret to browser code, source control, or the build command.
+## Project Structure
 
-For Roblox, the preferred variable is `ROBLOX_OPEN_CLOUD_API_KEY`. The server also accepts `ROBLOX_API_KEY` only as a compatibility alias for an existing Render service; configure **one** name, never both.
-
-## Release Validation
-
-Run the following from `retrostudio-secure` before release:
-
-```bash
-pytest -q
-python scripts/security_audit.py
+```
+├── backend/           # FastAPI server
+│   ├── app/
+│   │   ├── api/       # API routes (encode/decode)
+│   │   ├── core/      # Config, errors
+│   │   ├── encoder/   # Private CoolFormat encoder (server-only)
+│   │   ├── security/  # Auth, Supabase gateway, Turnstile
+│   │   └── main.py    # App entry point
+│   └── tests/         # Golden parity tests, security tests
+├── client/            # React frontend
+│   └── src/
+│       ├── components/ # UI components (shadcn/ui)
+│       ├── lib/        # Secure API client, Supabase client
+│       └── pages/     # Home (encoder, AI, social tabs)
+├── supabase/          # Database migrations & edge functions
+│   ├── functions/     # Free AI edge function (Groq)
+│   └── migrations/    # SQL migrations (additive, non-breaking)
+├── render.yaml        # Render deployment config
+└── package.json       # Frontend build
 ```
 
-See [`retrostudio-secure/SECURITY.md`](retrostudio-secure/SECURITY.md) for the architecture, connected Supabase controls, incident response, and deployment preconditions.
+## Security Model
+
+- Encoder logic stays server-side (never exposed to browser)
+- Supabase service-role key used only by the backend
+- RLS prevents direct table access from the browser
+- Token ledger managed via server-only RPC functions
+- Cloudflare Turnstile for suspicious-risk verification
+- Device binding and replay protection
+
+## Local Development
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+cp .env.example .env  # Fill in your keys
+uvicorn app.main:app --reload --port 8000
+
+# Frontend
+pnpm install
+pnpm dev
+```
+
+## Deployment
+
+See `render.yaml` for Render configuration. Set environment variables in Render dashboard.
+
+## Supabase Setup
+
+Apply migrations in order from `supabase/migrations/`. The migrations are additive and will not break existing accounts.
