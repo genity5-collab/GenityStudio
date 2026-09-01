@@ -2,7 +2,7 @@ import { createClient, type AuthChangeEvent, type Session, type Subscription } f
 
 import { SecureApiError } from "./secureApi";
 
-export type SupportedOAuthProvider = "google" | "discord";
+export type SupportedOAuthProvider = "discord";
 
 let browserClient: ReturnType<typeof createClient> | null = null;
 

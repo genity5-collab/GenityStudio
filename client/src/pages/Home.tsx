@@ -153,7 +153,7 @@ export default function Home() {
             {isAuthOptionsOpen && (
               <div className="absolute right-0 top-[calc(100%+0.55rem)] z-30 w-56 rounded-2xl border border-white/[0.1] bg-[#171b1e] p-2 shadow-2xl">
                 <p className="px-2 pb-2 text-[11px] leading-4 text-[#9fa8ac]">Use a verified identity. Tokens and permissions remain server-owned.</p>
-                {(["discord", "google"] as const).map((provider) => (
+                {(["discord"] as const).map((provider) => (
                   <Button
                     key={provider}
                     variant="ghost"
