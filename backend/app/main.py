@@ -10,6 +10,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
 from app.api.routes import router as api_router
+from app.api.account import router as account_router
 from app.core.config import get_settings
 from app.core.errors import SecureApiError
 
@@ -81,3 +82,4 @@ async def serve_frontend():
 
 
 app.include_router(api_router)
+app.include_router(account_router)

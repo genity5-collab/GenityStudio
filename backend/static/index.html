@@ -2472,30 +2472,46 @@ function localSyncDesc(desc){
 }
 
 /* === SUPABASE SYNC === */
+/* === API ACCOUNT PROXY (bypasses RLS via backend) === */
+async function apiGetToken(){
+  try{var s=await sb.auth.getSession();return s&&s.data&&s.data.session?s.data.session.access_token:"";}catch(e){return"";}
+}
+async function apiAccountGet(){
+  var token=await apiGetToken();
+  var resp=await fetch("/api/account",{headers:{"Authorization":"Bearer "+token}});
+  if(!resp.ok)throw new Error("Account load failed: "+resp.status);
+  return resp.json();
+}
+async function apiAccountPatch(data){
+  var token=await apiGetToken();
+  var resp=await fetch("/api/account",{method:"PATCH",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(data)});
+  if(!resp.ok)throw new Error("Account update failed: "+resp.status);
+  return resp.json().catch(function(){return{ok:true};});
+}
 function sbSync(){
   if(isLocalMode){localSync();return;}
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({api_keys:SB_KEYS,coder_data:SB_CODER,free_data:SB_FREE,settings:SB_SETTINGS,known_as:SB_ACCT.known_as||"",updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(r){if(r.error)console.warn("sync error:",r.error.message);},function(e){console.warn("sync error",e);});
+  apiAccountPatch({api_keys:SB_KEYS,coder_data:SB_CODER,free_data:SB_FREE,settings:SB_SETTINGS,known_as:SB_ACCT.known_as||""}).catch(function(e){console.warn("sync error",e);});
 }
 function sbSyncChat(arr){
   if(isLocalMode){localSyncChat(arr);return;}
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({chat_history:arr,updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(){},function(e){console.warn("chat sync error",e);});
+  apiAccountPatch({chat_history:arr}).catch(function(e){console.warn("chat sync error",e);});
 }
 function sbSyncName(name){
   if(isLocalMode){localSyncName(name);return;}
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({display_name:name,updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(){},function(e){console.warn("name sync error",e);});
+  apiAccountPatch({display_name:name}).catch(function(e){console.warn("name sync error",e);});
 }
 function sbSyncPic(pic){
   if(isLocalMode){localSyncPic(pic);return;}
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({profile_picture:pic,updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(){},function(e){console.warn("pic sync error",e);});
+  apiAccountPatch({profile_picture:pic}).catch(function(e){console.warn("pic sync error",e);});
 }
 function sbSyncDesc(desc){
   if(isLocalMode){localSyncDesc(desc);return;}
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({description:desc,updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(){},function(e){console.warn("desc sync error",e);});
+  apiAccountPatch({description:desc}).catch(function(e){console.warn("desc sync error",e);});
 }
 function updateProfilePreview(){
   var pic=SB_ACCT&&SB_ACCT.profile_picture?SB_ACCT.profile_picture:"";
@@ -2515,61 +2531,23 @@ async function sbLoad(){
   if(!SB_USER)return false;
   isLocalMode=false;
   try{
-    var r=await sb.from("ACCOUNTS").select("*").eq("user_id",SB_USER.id).maybeSingle();
-    if(r.error)throw r.error;
-    if(r.data){
-      SB_ACCT=r.data;
+    /* Use backend proxy to bypass RLS lockdown on ACCOUNTS table */
+    var data=await apiAccountGet();
+    if(data){
+      SB_ACCT=data;
       SB_KEYS=SB_ACCT.api_keys||{};
       SB_CODER=SB_ACCT.coder_data||{count:0,week:getWeekNum()};
       SB_FREE=SB_ACCT.free_data||{credits:FREE_DAILY_LIMIT,lastReset:Date.now(),lockoutUntil:0};
       SB_SETTINGS=SB_ACCT.settings||{};
       blockComments=SB_SETTINGS.blockComments!==false;
       try{updateCbToggle();}catch(e){}
+      /* If account was just created (no display_name), mark as new */
+      if(!SB_ACCT.display_name){SB_NEW_ACCOUNT=true;}
       /* Try migrating local data if Supabase account is new */
       tryMigrateLocal();
       return true;
-    }else{
-      /* No ACCOUNTS row yet — create from Discord metadata + local migration */
-      SB_NEW_ACCOUNT=true;
-      var meta=SB_USER.user_metadata||{};
-      SB_ACCT={
-        user_id:SB_USER.id,
-        email:SB_USER.email||"",
-        display_name:meta.full_name||meta.name||meta.user_name||SB_USER.email.split("@")[0],
-        profile_picture:meta.avatar_url||meta.picture||"",
-        description:meta.description||"",
-        role:"",
-        known_as:"",
-        api_keys:{},
-        chat_history:[],
-        coder_data:{count:0,week:getWeekNum()},
-        free_data:{credits:FREE_DAILY_LIMIT,lastReset:Date.now(),lockoutUntil:0},
-        settings:{},
-        bonus_credits:0,
-        bonus_used:false
-      };
-      /* Migrate local data if available */
-      var migrated=tryMigrateLocal();
-      /* Insert new account */
-      var ins=await sb.from("ACCOUNTS").insert({
-        user_id:SB_USER.id,
-        email:SB_ACCT.email,
-        display_name:SB_ACCT.display_name,
-        profile_picture:SB_ACCT.profile_picture,
-        description:SB_ACCT.description,
-        role:SB_ACCT.role,
-        known_as:SB_ACCT.known_as||"",
-        api_keys:SB_KEYS,
-        chat_history:SB_ACCT.chat_history||[],
-        coder_data:SB_CODER,
-        free_data:SB_FREE,
-        settings:SB_SETTINGS,
-        bonus_credits:0,
-        bonus_used:false
-      }).select().maybeSingle();
-      if(ins.data)SB_ACCT=ins.data;
-      return true;
     }
+    return false;
   }catch(e){console.warn("sbLoad error:",e.message);return false;}
 }
 
@@ -3181,14 +3159,8 @@ function finishAccount(){
   SB_ACCT.profile_picture=pic;
   SB_ACCT.description=bio;
   SB_ACCT.known_as=knownAs;
-  // Sync to Supabase
-  sb.from("ACCOUNTS").update({
-    display_name:name,
-    profile_picture:pic,
-    description:bio,
-    known_as:knownAs,
-    updated_at:new Date().toISOString()
-  }).eq("user_id",SB_USER.id).then(function(){
+  // Sync to Supabase via backend proxy
+  apiAccountPatch({display_name:name,profile_picture:pic,description:bio,known_as:knownAs}).then(function(){
     $id("finishGate").style.display="none";
     showMain(name);
   },function(e){
@@ -3247,21 +3219,24 @@ $id("cancelDelBtn").onclick=function(){var dw=$id("delWarn");if(dw)dw.style.disp
 $id("confirmDelBtn").onclick=function(){
   if(!SB_USER){setSt("delSt","Not logged in",false);return;}
   var btn=$id("confirmDelBtn");btn.disabled=true;btn.textContent="Deleting...";
-  /* Delete ACCOUNTS row */
-  sb.from("ACCOUNTS").delete().eq("user_id",SB_USER.id).then(function(){
-    /* Sign out and clear */
-    sb.auth.signOut().then(function(){
+  /* Delete ACCOUNTS row via backend proxy */
+  (async function(){
+    try{
+      var token=await apiGetToken();
+      var resp=await fetch("/api/account",{method:"DELETE",headers:{"Authorization":"Bearer "+token}});
+      if(!resp.ok)throw new Error("Delete failed: "+resp.status);
+      await sb.auth.signOut();
       SB_USER=null;SB_ACCT=null;SB_KEYS={};SB_CODER={};SB_FREE={};
       Object.keys(localStorage).filter(function(k){return k.indexOf("rs_")===0;}).forEach(function(k){localStorage.removeItem(k);});
       var m=$id("main");if(m)m.style.display="none";
       var g=$id("gate");if(g){g.style.display="block";g.style.opacity="1";g.style.visibility="visible";}
       setSt("gateSt","Account deleted.",true);
       btn.disabled=false;btn.textContent="Delete everything";
-    });
-  },function(e){
-    setSt("delSt","Error: "+e.message,false);
-    btn.disabled=false;btn.textContent="Delete everything";
-  });
+    }catch(e){
+      setSt("delSt","Error: "+e.message,false);
+      btn.disabled=false;btn.textContent="Delete everything";
+    }
+  })();
 };
 
 /* Profile update handlers */
@@ -3296,7 +3271,7 @@ $id("changeDescBtn").onclick=function(){
 /* Known As sync */
 function sbSyncKnownAs(val){
   if(!SB_USER)return;
-  sb.from("ACCOUNTS").update({known_as:val,updated_at:new Date().toISOString()}).eq("user_id",SB_USER.id).then(function(){},function(e){console.warn("known_as sync error",e);});
+  apiAccountPatch({known_as:val}).catch(function(e){console.warn("known_as sync error",e);});
 }
 $id("changeKnownAsBtn").onclick=function(){
   var tags=[];
