@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { decodeWithSecureApi, encodeWithSecureApi, SecureApiError } from "@/lib/secureApi";
+import RetroxPanel from "@/components/RetroxPanel";
 import { cn } from "@/lib/utils";
 import { observeAuthSession, readAccessToken, startOAuthSignIn, type SupportedOAuthProvider } from "@/lib/supabaseClient";
 import {
@@ -12,7 +13,6 @@ import {
   Copy,
   FileCode2,
   LockKeyhole,
-  MessageSquareText,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -302,10 +302,12 @@ export default function Home() {
               </div>
             </footer>
           </section>
+        ) : activeTab === "retrox" ? (
+          <RetroxPanel />
         ) : (
           <section className="mt-3 rounded-[22px] border border-white/[0.09] bg-[#111416] p-6 text-center shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:p-9">
-            {activeTab === "retrox" ? <MessageSquareText className="mx-auto size-6 text-violet-300" /> : <Users className="mx-auto size-6 text-sky-300" />}
-            <h1 className="mt-3 text-base font-semibold text-white">{activeTab === "retrox" ? "Retrox workspace" : "Social workspace"}</h1>
+            <Users className="mx-auto size-6 text-sky-300" />
+            <h1 className="mt-3 text-base font-semibold text-white">Social workspace</h1>
             <p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#929da2]">This section will follow the same compact dark layout once its protected service contracts are moved from the legacy browser implementation.</p>
           </section>
         )}

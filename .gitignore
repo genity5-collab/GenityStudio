@@ -40,3 +40,4 @@ logs
 .manus-logs/
 client/public/__manus__/
 .webdev/
+supabase/.temp/
