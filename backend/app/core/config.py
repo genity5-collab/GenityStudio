@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     supabase_publishable_key: str | None = None
     supabase_service_role_key: str | None = None
     supabase_legacy_server_key: str | None = Field(default=None, validation_alias="SUPABASE_KEY", exclude=True)
+    groq_api_key: str | None = None
     app_internal_signing_secret: str | None = None
     turnstile_secret_key: str | None = None
     turnstile_expected_hostname: str = ""

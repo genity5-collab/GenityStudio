@@ -74,11 +74,32 @@ async def healthcheck():
 
 # Serve the frontend
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_frontend_cache: str | None = None
+
+
+def _load_frontend_html() -> str:
+    global _frontend_cache
+    if _frontend_cache is not None:
+        return _frontend_cache
+    html_path = STATIC_DIR / "index.html"
+    with open(html_path, "r", encoding="utf-8") as f:
+        _frontend_cache = f.read()
+    return _frontend_cache
 
 
 @app.get("/", include_in_schema=False)
-async def serve_frontend():
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+async def serve_frontend(request: Request):
+    s: Settings = request.app.state.settings
+    html = _load_frontend_html()
+    # Inject secrets from env vars — never hardcode in the HTML
+    sb_url = (s.supabase_url or "").rstrip("/")
+    sb_pub = s.effective_supabase_publishable_key or ""
+    groq_key = s.groq_api_key or ""
+    html = html.replace("__SB_URL__", sb_url)
+    html = html.replace("__SB_PUB_KEY__", sb_pub)
+    html = html.replace("__GROQ_KEY__", groq_key)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 app.include_router(api_router)

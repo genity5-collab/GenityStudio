@@ -63,7 +63,7 @@ async def get_account(request: Request, authorization: str | None = Header(defau
     user = await require_authenticated_user(authorization, settings)
     headers = await _sb_headers(settings)
     base = settings.supabase_url.rstrip("/")
-    table = f'{base}/rest/v1/"ACCOUNTS"'
+    table = f"{base}/rest/v1/ACCOUNTS"
 
     # Try to load existing account
     try:
@@ -87,7 +87,6 @@ async def get_account(request: Request, authorization: str | None = Header(defau
 
     new_account = {
         "user_id": user.user_id,
-        "email": profile.get("email", ""),
         "display_name": meta.get("full_name") or meta.get("name") or meta.get("user_name") or (profile.get("email", "user").split("@")[0]),
         "profile_picture": meta.get("avatar_url") or meta.get("picture", ""),
         "description": meta.get("description", ""),
@@ -100,6 +99,7 @@ async def get_account(request: Request, authorization: str | None = Header(defau
         "settings": {},
         "bonus_credits": 0,
         "bonus_used": False,
+        "updated_at": _now_iso(),
     }
 
     try:
@@ -140,7 +140,7 @@ async def update_account(
     user = await require_authenticated_user(authorization, settings)
     headers = await _sb_headers(settings)
     base = settings.supabase_url.rstrip("/")
-    table = f'{base}/rest/v1/"ACCOUNTS"'
+    table = f"{base}/rest/v1/ACCOUNTS"
 
     # Build update dict (only non-None fields)
     update_data = payload.model_dump(exclude_none=True)
@@ -195,7 +195,7 @@ async def delete_account(
     user = await require_authenticated_user(authorization, settings)
     headers = await _sb_headers(settings)
     base = settings.supabase_url.rstrip("/")
-    table = f'{base}/rest/v1/"ACCOUNTS"'
+    table = f"{base}/rest/v1/ACCOUNTS"
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

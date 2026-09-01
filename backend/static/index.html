@@ -2358,8 +2358,8 @@ function addLog(id,msg,cls){var b=$id(id);if(!b)return;var d=document.createElem
 function strongPass(){var c="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#";var a=new Uint8Array(16);crypto.getRandomValues(a);var s="";for(var k=0;k<16;k++)s+=c[a[k]%c.length];return s;}
 var SID="sess_"+Date.now()+"_"+Math.floor(Math.random()*99999);
 /* === SUPABASE + LOCAL AUTH SYSTEM (rebuilt) === */
-var SB_URL="https://gbnxvwglnwwsssqkcezy.supabase.co";
-var SB_KEY="sb_publishable_8awdvURLl4wDCbMNPiZT9g_Aa-GSmII";
+var SB_URL="__SB_URL__";
+var SB_KEY="__SB_PUB_KEY__";
 var sb=supabase.createClient(SB_URL,SB_KEY);
 // Clean OAuth tokens from URL hash after page load (delayed so supabase-js can read it first)
 if(window.location.hash&&window.location.hash.indexOf("access_token")>-1){
@@ -2416,7 +2416,7 @@ var SB_KEYS={},SB_CODER=null,SB_FREE=null,SB_SETTINGS={};
 var isLocalMode=true;
 var LOCAL_ACCT=null;
 var FREE_DAILY_LIMIT=5;
-var FREE_API_KEY="";
+var FREE_API_KEY="__GROQ_KEY__";
 
 function saveU(o){} 
 function loadU(){return SB_USER?{name:SB_ACCT&&SB_ACCT.display_name||SB_USER.email}:null;}
