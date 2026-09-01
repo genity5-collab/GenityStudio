@@ -7,7 +7,8 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
 from app.api.account import router as account_router
@@ -72,35 +73,79 @@ async def healthcheck():
     return {"status": "ok"}
 
 
-# Serve the frontend
+# ---------------------------------------------------------------------------
+# API routes — registered BEFORE the SPA catch-all so they take priority
+# ---------------------------------------------------------------------------
+app.include_router(api_router)
+app.include_router(account_router)
+
+
+# ---------------------------------------------------------------------------
+# Frontend serving
+# ---------------------------------------------------------------------------
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-_frontend_cache: str | None = None
+ASSETS_DIR = STATIC_DIR / "assets"
+
+# Mount static assets (JS/CSS bundles) at /assets
+if ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+# Cache for the React build's index.html (no template replacement needed -
+# Vite bakes env vars at build time)
+_react_html_cache: str | None = None
 
 
-def _load_frontend_html() -> str:
-    global _frontend_cache
-    if _frontend_cache is not None:
-        return _frontend_cache
-    html_path = STATIC_DIR / "index.html"
-    with open(html_path, "r", encoding="utf-8") as f:
-        _frontend_cache = f.read()
-    return _frontend_cache
+def _load_react_html() -> str:
+    global _react_html_cache
+    if _react_html_cache is not None:
+        return _react_html_cache
+    with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
+        _react_html_cache = f.read()
+    return _react_html_cache
 
 
+# Cache for the legacy frontend (still served at /legacy for backwards compat)
+_legacy_html_cache: str | None = None
+
+
+def _load_legacy_html() -> str:
+    global _legacy_html_cache
+    if _legacy_html_cache is not None:
+        return _legacy_html_cache
+    legacy_path = STATIC_DIR / "legacy" / "index.html"
+    with open(legacy_path, "r", encoding="utf-8") as f:
+        _legacy_html_cache = f.read()
+    return _legacy_html_cache
+
+
+# Serve the React app at the root
 @app.get("/", include_in_schema=False)
-async def serve_frontend(request: Request):
-    s: Settings = request.app.state.settings
-    html = _load_frontend_html()
-    # Inject secrets from env vars — never hardcode in the HTML
+async def serve_react_frontend():
+    return HTMLResponse(content=_load_react_html(), media_type="text/html")
+
+
+# Serve the legacy v24 frontend at /legacy (retains original functionality)
+@app.get("/legacy", include_in_schema=False)
+async def serve_legacy_frontend(request: Request):
+    s = request.app.state.settings
+    html = _load_legacy_html()
     sb_url = (s.supabase_url or "").rstrip("/")
     sb_pub = s.effective_supabase_publishable_key or ""
     groq_key = s.groq_api_key or ""
     html = html.replace("__SB_URL__", sb_url)
     html = html.replace("__SB_PUB_KEY__", sb_pub)
     html = html.replace("__GROQ_KEY__", groq_key)
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html, media_type="text/html")
 
 
-app.include_router(api_router)
-app.include_router(account_router)
+# SPA catch-all: any non-API, non-static, non-health route returns the React app
+# so client-side routing (wouter) works on refresh / deep links.
+# This is registered LAST so all API routes above take priority.
+@app.get("/{path:path}", include_in_schema=False)
+async def spa_catch_all(path: str):
+    # If the path maps to an actual static file, serve it
+    candidate = STATIC_DIR / path
+    if candidate.is_file():
+        return FileResponse(candidate)
+    # Otherwise return the React app for SPA routing
+    return HTMLResponse(content=_load_react_html(), media_type="text/html")
