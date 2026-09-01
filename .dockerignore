@@ -1,0 +1,11 @@
+node_modules
+client
+docs
+.git
+*.md
+package.json
+package-lock.json
+package_clean.json
+tsconfig.json
+vite.config.ts
+render.yaml
