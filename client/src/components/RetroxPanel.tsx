@@ -23,13 +23,16 @@ type ChatMessage = {
 };
 
 const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "all", label: "All" },
   { value: "faces", label: "Faces" },
-  { value: "heads", label: "Heads" },
+  { value: "decals", label: "Decals" },
+  { value: "meshes", label: "Meshes" },
+  { value: "images", label: "Images" },
   { value: "hats", label: "Hats" },
+  { value: "heads", label: "Heads" },
   { value: "hair", label: "Hair" },
   { value: "gear", label: "Gear" },
   { value: "accessories", label: "Accessories" },
+  { value: "all", label: "All" },
 ];
 
 const RETROX_SYSTEM_PROMPT =
@@ -43,7 +46,7 @@ const RETROX_SYSTEM_PROMPT =
 
 export default function RetroxPanel() {
   const [keyword, setKeyword] = useState("");
-  const [category, setCategory] = useState("faces");
+  const [category, setCategory] = useState("decals");
   const [results, setResults] = useState<CatalogAsset[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -143,7 +146,7 @@ export default function RetroxPanel() {
         )}
       </div>
       <p className="text-xs leading-5 text-[#929da2]">
-        Search the live Roblox catalog for faces, decals, hats, and accessories. Retrox can't import 3D models
+        Search the live Roblox catalog AND toolbox for faces, decals, meshes, images, and accessories. Retrox can't import 3D models
         directly, but it embeds real asset IDs (rbxassetid://…) directly into the Luau it writes.
       </p>
 

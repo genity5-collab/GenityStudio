@@ -8,7 +8,7 @@ from app.core.errors import AUTH_REQUIRED, SERVICE_UNAVAILABLE, SecureApiError
 
 
 _BEARER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{20,4096}$")
-APPROVED_OAUTH_PROVIDERS = frozenset({"google", "discord"})
+APPROVED_OAUTH_PROVIDERS = frozenset({"discord"})
 
 
 @dataclass(frozen=True, slots=True)

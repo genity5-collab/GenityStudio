@@ -28,6 +28,11 @@ const SUBCATEGORY_MAP: Record<string, number> = {
   shirts: 12, pants: 14, tshirts: 13,
 };
 
+// Toolbox asset types for raw assets (decals, meshes, images)
+const TOOLBOX_TYPES: Record<string, number> = {
+  decals: 13, meshes: 4, images: 1, models: 10, audio: 3,
+};
+
 type CatalogAsset = {
   id: number;
   name: string;
@@ -53,7 +58,7 @@ const CATALOG_TOOL = {
         keyword: { type: "string", description: "Search keyword, e.g. 'smile face' or 'dragon mesh'." },
         category: {
           type: "string",
-          enum: Object.keys(SUBCATEGORY_MAP),
+          enum: [...Object.keys(SUBCATEGORY_MAP), ...Object.keys(TOOLBOX_TYPES)],
           description: "Catalog subcategory. 'faces' for Head.Face decals, 'hats' for accessories, etc.",
         },
       },
@@ -63,7 +68,53 @@ const CATALOG_TOOL = {
 };
 
 async function searchRobloxCatalog(keyword: string, categoryKey: string): Promise<{ results: CatalogAsset[] }> {
-  const subcategory = SUBCATEGORY_MAP[categoryKey?.toLowerCase()] ?? SUBCATEGORY_MAP.all;
+  const catLower = categoryKey?.toLowerCase() ?? "all";
+  const robloxApiKey = Deno.env.get("ROBLOX_API_KEY");
+  
+  // ── Toolbox search for raw assets (decals, meshes, images) ──────────
+  if (catLower in TOOLBOX_TYPES) {
+    const assetType = TOOLBOX_TYPES[catLower];
+    const params = new URLSearchParams({ limit: "20", keyword: keyword.slice(0, 100) });
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (robloxApiKey) headers["x-api-key"] = robloxApiKey;
+    try {
+      const response = await fetch(`https://apis.roblox.com/toolbox-service/v1/marketplace/${assetType}?${params.toString()}`, { headers, signal: AbortSignal.timeout(7000) });
+      if (!response.ok) return { results: [] };
+      const body = await response.json();
+      const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
+      const results: CatalogAsset[] = items.map((item: Record<string, unknown>) => ({
+        id: (item.asset?.id ?? item.id) as number,
+        name: (item.asset?.name ?? item.name ?? "Unknown") as string,
+        assetType: assetType,
+        itemType: "Asset",
+        creatorName: (item.creator?.name ?? item.creatorName ?? "Unknown") as string,
+        thumbnailUrl: null,
+        rbxAssetId: `rbxassetid://${item.asset?.id ?? item.id}`,
+      })).filter((r: CatalogAsset) => r.id);
+      // Fetch thumbnails
+      if (results.length > 0) {
+        const ids = results.map(r => r.id);
+        const thumbParams = new URLSearchParams({ assetIds: ids.join(","), size: "150x150", format: "Png", isCircular: "false" });
+        try {
+          const thumbResp = await fetch(`https://thumbnails.roblox.com/v1/assets?${thumbParams.toString()}`, { headers: { Accept: "application/json" } });
+          if (thumbResp.ok) {
+            const thumbBody = await thumbResp.json();
+            const thumbData = Array.isArray(thumbBody?.data) ? thumbBody.data : [];
+            for (const entry of thumbData) {
+              if (typeof entry.targetId === "number" && typeof entry.imageUrl === "string") {
+                const r = results.find(x => x.id === entry.targetId);
+                if (r) r.thumbnailUrl = entry.imageUrl;
+              }
+            }
+          }
+        } catch {}
+      }
+      return { results };
+    } catch { return { results: [] }; }
+  }
+
+  // ── Catalog search for wearables (faces, hats, etc.) ────────────────
+  const subcategory = SUBCATEGORY_MAP[catLower] ?? SUBCATEGORY_MAP.all;
   const params = new URLSearchParams({
     Category: "1",
     Subcategory: String(subcategory),
