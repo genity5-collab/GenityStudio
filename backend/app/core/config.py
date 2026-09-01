@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     app_allowed_origins: str = ""
-    app_allowed_hosts: str = "localhost,127.0.0.1"
+    app_allowed_hosts: str = "localhost,127.0.0.1,retrostudioencoderbeta.onrender.com"
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
     supabase_service_role_key: str | None = None
