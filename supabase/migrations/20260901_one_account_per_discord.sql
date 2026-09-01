@@ -84,7 +84,7 @@ BEGIN
     -- Check if this Discord identity ID is already claimed by another user
     SELECT supabase_user_id INTO existing_user
     FROM public.discord_identity_claims
-    WHERE discord_user_id = NEW.identity_id;
+    WHERE discord_user_id = NEW.provider_id;
 
     IF FOUND AND existing_user <> NEW.user_id THEN
         RAISE EXCEPTION 'This Discord account is already linked to another user.'
@@ -93,7 +93,7 @@ BEGIN
 
     -- Claim it for this user
     INSERT INTO public.discord_identity_claims (discord_user_id, supabase_user_id)
-    VALUES (NEW.identity_id, NEW.user_id)
+    VALUES (NEW.provider_id, NEW.user_id)
     ON CONFLICT (discord_user_id)
     DO UPDATE SET supabase_user_id = EXCLUDED.supabase_user_id, claimed_at = now()
     WHERE discord_identity_claims.supabase_user_id = NEW.user_id;
@@ -115,7 +115,7 @@ CREATE TRIGGER trg_block_duplicate_discord
 -- ── 5. Also backfill existing Discord identities ─────────────────────────────
 INSERT INTO public.discord_identity_claims (discord_user_id, supabase_user_id)
 SELECT
-    i.identity_id::TEXT,
+    i.provider_id::TEXT,
     i.user_id
 FROM auth.identities i
 WHERE i.provider = 'discord'
