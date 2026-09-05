@@ -3306,11 +3306,7 @@ We found your existing local account. After login, your data will be migrated au
 
   function rsxUpgradeIcons(root) {
     if (!root) return;
-    var wanted = [];
-    for (var code in RSX_ICONS) {
-      var cp = parseInt(code.slice(4, code.length - 1), 16);
-      wanted.push(String.fromCodePoint(cp));
-    }
+    var wanted = Object.keys(RSX_ICONS);
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         var el = n.parentNode;
