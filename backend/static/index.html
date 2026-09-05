@@ -2661,6 +2661,9 @@ We found your existing local account. After login, your data will be migrated au
     try {
       url = typeof input === "string" ? input : (input && input.url) || "";
     } catch (e) { url = ""; }
+    if (/\/functions\/v1\/free-ai/.test(url) && init && init.method === "POST") {
+      return retroxStreamFetch(input, init);
+    }
     if (BLOCKED_PROVIDER_RE.test(url)) {
       return Promise.reject(new Error(LOCK_MSG));
     }
@@ -2938,6 +2941,207 @@ We found your existing local account. After login, your data will be migrated au
     }
   }
   setInterval(syncCredits, 3000);
+
+  /* ── 4. Live Roblox catalog search (SSE) ─────────────────────────────────
+     The free-ai call is upgraded to a streaming request. Each catalog search
+     the AI performs streams back live: all results (max 5) are shown in the
+     chat with thumbnails while Retrox is still building. When the response
+     finishes, the app's own "Retrox Verified Asset Search" card renders the
+     full verified set and the asset(s) chosen for the build get highlighted. */
+  var chosenAssetIds = [];
+  var livePanel = null;
+
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function retroxStreamFetch(input, init) {
+    if (!init || !init.body) return _origFetch(input, init);
+    var payload;
+    try { payload = JSON.parse(String(init.body)); } catch (e) { return _origFetch(input, init); }
+    if (payload.stream === true) return _origFetch(input, init);
+    payload.stream = true;
+    var newInit = {};
+    for (var k in init) { if (Object.prototype.hasOwnProperty.call(init, k)) newInit[k] = init[k]; }
+    newInit.body = JSON.stringify(payload);
+    return _origFetch(input, newInit).then(function (resp) {
+      var ct = "";
+      try { ct = resp.headers.get("Content-Type") || ""; } catch (e) {}
+      if (ct.indexOf("text/event-stream") === -1 || !resp.body) return resp;
+      return readSSE(resp);
+    });
+  }
+
+  function parseSSE(block) {
+    var ev = "message", data = "";
+    var lines = block.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (l.indexOf("event:") === 0) ev = l.slice(6).trim();
+      else if (l.indexOf("data:") === 0) data += l.slice(5).replace(/^ /, "");
+    }
+    if (!data) return null;
+    try { return { event: ev, data: JSON.parse(data) }; } catch (e) { return null; }
+  }
+
+  function readSSE(resp) {
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = "";
+    var finished = false;
+    return new Promise(function (resolve, reject) {
+      function pump() {
+        reader.read().then(function (chunk) {
+          if (chunk.done) {
+            if (!finished) reject(new Error("The secure AI stream ended early. Please try again."));
+            return;
+          }
+          buf += dec.decode(chunk.value, { stream: true });
+          var parts = buf.split("\n\n");
+          buf = parts.pop();
+          for (var i = 0; i < parts.length; i++) {
+            var evt = parseSSE(parts[i]);
+            if (!evt) continue;
+            if (evt.event === "search") {
+              try { liveSearchUpdate(evt.data); } catch (e) {}
+            } else if (evt.event === "done") {
+              finished = true;
+              var data = evt.data || {};
+              try { liveSearchDone(data); } catch (e) {}
+              resolve(new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } }));
+            } else if (evt.event === "error") {
+              finished = true;
+              var ed = evt.data || {};
+              resolve(new Response(JSON.stringify(ed), { status: ed.status || 502, headers: { "Content-Type": "application/json" } }));
+            }
+          }
+          if (!finished) pump();
+        }, function (err) {
+          if (!finished) reject(err);
+        });
+      }
+      pump();
+    });
+  }
+
+  function liveCard(a) {
+    var d = document.createElement("div");
+    d.style.cssText = "border:1px solid rgba(91,140,255,.28);background:rgba(8,14,30,.58);border-radius:10px;padding:8px;min-width:0";
+    var html = "";
+    if (a.thumbnail_url) {
+      html += '<img src="' + escHtml(a.thumbnail_url) + '" alt="asset preview" loading="lazy" referrerPolicy="no-referrer"' +
+        ' style="display:block;width:100%;height:104px;object-fit:cover;border-radius:7px;background:#111827;margin-bottom:7px"' +
+        ' onerror="this.style.display=\'none\'">';
+    }
+    html += '<div style="font-size:.72rem;font-weight:800;line-height:1.25;word-break:break-word">' + escHtml(a.name || "Roblox asset") + '</div>';
+    html += '<div style="font-size:.61rem;color:var(--mu);line-height:1.45;margin-top:4px">' + escHtml(a.kind || "asset") +
+      " · ID " + escHtml(String(a.id == null ? "" : a.id)) + (a.creator ? " · " + escHtml(a.creator) : "") + '</div>';
+    d.innerHTML = html;
+    return d;
+  }
+
+  function liveSearchUpdate(ev) {
+    var log = document.getElementById("aiLog");
+    if (!log) return;
+    if (!livePanel || !livePanel.isConnected) {
+      livePanel = document.createElement("div");
+      livePanel.className = "chat-row ai";
+      livePanel.innerHTML =
+        '<div class="bwrap"><div class="deep-research-card" style="border-color:rgba(74,222,128,.45)">' +
+        '<div class="deep-research-head"><span>Live Roblox Catalog Search</span>' +
+        '<span class="deep-research-live">LIVE</span></div>' +
+        '<div style="font-size:.64rem;color:var(--mu);margin-top:5px;line-height:1.4">' +
+        "Retrox is searching the real Roblox catalog right now — showing everything it finds (up to 5 results)..." +
+        '</div><div class="rsx-live-body"></div>' +
+        '<div style="font-size:.6rem;color:#4ade80;margin-top:8px">analyzing results · picking the best match for the build…</div>' +
+        '</div></div>';
+    }
+    log.appendChild(livePanel);
+    var body = livePanel.querySelector(".rsx-live-body");
+    var results = Array.isArray(ev.results) ? ev.results.slice(0, 5) : [];
+    var wrap = document.createElement("div");
+    wrap.style.cssText = "margin-top:10px";
+    var head = document.createElement("div");
+    head.style.cssText = "font-size:.62rem;font-weight:700;color:#5b8cff";
+    head.textContent = 'Searched "' + (ev.keyword || "") + '"' +
+      (ev.category && ev.category !== "all" ? " · " + ev.category : "") +
+      " · " + (results.length || 0) + " result(s) from " + (ev.source || "Roblox");
+    wrap.appendChild(head);
+    var grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px";
+    for (var i = 0; i < results.length; i++) grid.appendChild(liveCard(results[i]));
+    if (results.length === 0) {
+      var none = document.createElement("div");
+      none.style.cssText = "font-size:.62rem;color:var(--mu);margin-top:6px";
+      none.textContent = "No verified results for this keyword — Retrox will try another.";
+      grid.appendChild(none);
+    }
+    wrap.appendChild(grid);
+    body.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function liveSearchDone(data) {
+    var pas = data && data.roblox_asset_search;
+    var assets = pas && Array.isArray(pas.assets) ? pas.assets : [];
+    chosenAssetIds = [];
+    for (var i = 0; i < assets.length; i++) {
+      if (assets[i].used_in_build && assets[i].id != null) chosenAssetIds.push(String(assets[i].id));
+    }
+    if (livePanel && livePanel.parentNode) livePanel.parentNode.removeChild(livePanel);
+    livePanel = null;
+  }
+
+  /* highlight the chosen asset(s) inside the app's Verified Asset Search card */
+  var hlObserver = new MutationObserver(function () { highlightChosen(); });
+  function watchHighlight() {
+    var log = document.getElementById("aiLog");
+    if (log) hlObserver.observe(log, { childList: true, subtree: true });
+    else setTimeout(watchHighlight, 500);
+  }
+  watchHighlight();
+
+  function highlightChosen() {
+    if (!chosenAssetIds.length) return;
+    var log = document.getElementById("aiLog");
+    if (!log) return;
+    var cards = log.querySelectorAll(".deep-research-card");
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      if (c.__rsxDone) continue;
+      var txt = c.textContent || "";
+      if (txt.indexOf("Verified Asset Search") === -1) continue;
+      c.__rsxDone = true;
+      for (var j = 0; j < chosenAssetIds.length; j++) {
+        var re = new RegExp("ID\\s" + chosenAssetIds[j] + "\\b");
+        var divs = c.querySelectorAll("div");
+        for (var m = 0; m < divs.length; m++) {
+          var t = divs[m].textContent || "";
+          if (re.test(t)) {
+            var p = divs[m];
+            var cardEl = null;
+            for (var up = 0; up < 4 && p && p !== c; up++) {
+              if (p.style && p.style.borderRadius === "10px") { cardEl = p; break; }
+              p = p.parentNode;
+            }
+            if (cardEl && !cardEl.__rsxChosen) {
+              cardEl.__rsxChosen = true;
+              cardEl.style.borderColor = "rgba(74,222,128,.85)";
+              cardEl.style.boxShadow = "0 0 14px rgba(74,222,128,.25)";
+              var badge = document.createElement("div");
+              badge.textContent = "\u2605 CHOSEN FOR BUILD";
+              badge.style.cssText = "font-size:.56rem;font-weight:800;color:#4ade80;margin-top:6px;letter-spacing:.4px";
+              cardEl.appendChild(badge);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
 })();
 
 </script>
