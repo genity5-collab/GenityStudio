@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// ─── CORS ────────────────────────────────────────────────────────────────────
+// ─── CORS + origin allowlist (enforced, not just echoed) ─────────────────────
 const ALLOWED_ORIGINS = new Set([
   "https://retrostudioencoderbeta.onrender.com",
   "https://retrostudioencoderdev.oneapp.dev",
@@ -18,19 +18,23 @@ function corsHeadersFor(request: Request): Record<string, string> {
 }
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "openai/gpt-oss-20b";
-const FREE_MODES = new Set(["auto", "fast", "plan"]);
+const GROQ_MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"]; // primary + auto-fallback
+const FREE_MODES = new Set(["auto", "fast", "plan", "think", "long", "coder"]);
+const CHARGE_BASE = 3;        // credits per Retrox use (server decides; client never sends cost)
+const CHARGE_SEARCH_EXTRA = 2; // extra credits when live Roblox catalog search runs
 
 // ─── Roblox catalog search (live, public Marketplace API) ──────────────────
-const SUBCATEGORY_MAP: Record<string, number> = {
+// Toolbox marketplace API is used first (not IP-blocked, returns rich data);
+// catalog.roblox.com is tried for wearables with graceful fallback.
+
+const TOOLBOX_TYPES: Record<string, number> = {
+  decals: 13, faces: 13, meshes: 4, images: 1, models: 10, audio: 3,
+};
+
+const CATALOG_SUBCATEGORIES: Record<string, number> = {
   all: 1, faces: 10, heads: 15, hats: 9, hair: 20,
   gear: 5, accessories: 19, bundles: 37, animations: 27,
   shirts: 12, pants: 14, tshirts: 13,
-};
-
-// Toolbox asset types for raw assets (decals, meshes, images)
-const TOOLBOX_TYPES: Record<string, number> = {
-  decals: 13, meshes: 4, images: 1, models: 10, audio: 3,
 };
 
 type CatalogAsset = {
@@ -55,10 +59,13 @@ const CATALOG_TOOL = {
     parameters: {
       type: "object",
       properties: {
-        keyword: { type: "string", description: "Search keyword, e.g. 'smile face' or 'dragon mesh'." },
+        keyword: {
+          type: "string",
+          description: "Search keyword, e.g. 'smile face' or 'dragon mesh'.",
+        },
         category: {
           type: "string",
-          enum: [...Object.keys(SUBCATEGORY_MAP), ...Object.keys(TOOLBOX_TYPES)],
+          enum: Array.from(new Set([...Object.keys(TOOLBOX_TYPES), ...Object.keys(CATALOG_SUBCATEGORIES)])),
           description: "Catalog subcategory. 'faces' for Head.Face decals, 'hats' for accessories, etc.",
         },
       },
@@ -67,54 +74,86 @@ const CATALOG_TOOL = {
   },
 };
 
-async function searchRobloxCatalog(keyword: string, categoryKey: string): Promise<{ results: CatalogAsset[] }> {
-  const catLower = categoryKey?.toLowerCase() ?? "all";
-  const robloxApiKey = Deno.env.get("ROBLOX_API_KEY");
-  
-  // ── Toolbox search for raw assets (decals, meshes, images) ──────────
-  if (catLower in TOOLBOX_TYPES) {
-    const assetType = TOOLBOX_TYPES[catLower];
-    const params = new URLSearchParams({ limit: "20", keyword: keyword.slice(0, 100) });
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (robloxApiKey) headers["x-api-key"] = robloxApiKey;
-    try {
-      const response = await fetch(`https://apis.roblox.com/toolbox-service/v1/marketplace/${assetType}?${params.toString()}`, { headers, signal: AbortSignal.timeout(7000) });
-      if (!response.ok) return { results: [] };
-      const body = await response.json();
-      const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
-      const results: CatalogAsset[] = items.map((item: Record<string, unknown>) => ({
-        id: (item.asset?.id ?? item.id) as number,
-        name: (item.asset?.name ?? item.name ?? "Unknown") as string,
-        assetType: assetType,
-        itemType: "Asset",
-        creatorName: (item.creator?.name ?? item.creatorName ?? "Unknown") as string,
-        thumbnailUrl: null,
-        rbxAssetId: `rbxassetid://${item.asset?.id ?? item.id}`,
-      })).filter((r: CatalogAsset) => r.id);
-      // Fetch thumbnails
-      if (results.length > 0) {
-        const ids = results.map(r => r.id);
-        const thumbParams = new URLSearchParams({ assetIds: ids.join(","), size: "150x150", format: "Png", isCircular: "false" });
-        try {
-          const thumbResp = await fetch(`https://thumbnails.roblox.com/v1/assets?${thumbParams.toString()}`, { headers: { Accept: "application/json" } });
-          if (thumbResp.ok) {
-            const thumbBody = await thumbResp.json();
-            const thumbData = Array.isArray(thumbBody?.data) ? thumbBody.data : [];
-            for (const entry of thumbData) {
-              if (typeof entry.targetId === "number" && typeof entry.imageUrl === "string") {
-                const r = results.find(x => x.id === entry.targetId);
-                if (r) r.thumbnailUrl = entry.imageUrl;
-              }
-            }
-          }
-        } catch {}
-      }
-      return { results };
-    } catch { return { results: [] }; }
-  }
+const TOOLBOX_SEARCH_URL = "https://apis.roblox.com/toolbox-service/v1/marketplace";
+const TOOLBOX_DETAILS_URL = "https://apis.roblox.com/toolbox-service/v1/items/details";
+const CATALOG_URL = "https://catalog.roblox.com/v1/search/items/details";
+const THUMBNAIL_URL = "https://thumbnails.roblox.com/v1/assets";
 
-  // ── Catalog search for wearables (faces, hats, etc.) ────────────────
-  const subcategory = SUBCATEGORY_MAP[catLower] ?? SUBCATEGORY_MAP.all;
+function httpHeaders(robloxApiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "User-Agent": "RetroStudioEncoder/2.0",
+  };
+  if (robloxApiKey) headers["x-api-key"] = robloxApiKey;
+  return headers;
+}
+
+async function fetchThumbnails(ids: number[]): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  if (ids.length === 0) return map;
+  try {
+    const params = new URLSearchParams({ assetIds: ids.join(","), size: "150x150", format: "Png", isCircular: "false" });
+    const resp = await fetch(`${THUMBNAIL_URL}?${params.toString()}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return map;
+    const body = await resp.json();
+    const data = Array.isArray(body?.data) ? body.data : [];
+    for (const entry of data) {
+      if (typeof entry.targetId === "number" && typeof entry.imageUrl === "string" && entry.state === "Completed") {
+        map.set(entry.targetId, entry.imageUrl);
+      }
+    }
+  } catch { /* best-effort */ }
+  return map;
+}
+
+// ── Toolbox flow: search → details (name/creator) → thumbnails ──────────
+async function searchToolbox(keyword: string, assetType: number): Promise<{ results: CatalogAsset[] }> {
+  const robloxApiKey = Deno.env.get("ROBLOX_API_KEY");
+  const params = new URLSearchParams({ limit: "20", keyword: keyword.slice(0, 100) });
+  try {
+    const resp = await fetch(`${TOOLBOX_SEARCH_URL}/${assetType}?${params.toString()}`, { headers: httpHeaders(robloxApiKey), signal: AbortSignal.timeout(7000) });
+    if (!resp.ok) return { results: [] };
+    const body = await resp.json();
+    const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
+    const ids = items.map((i: Record<string, unknown>) => i.id).filter((id: unknown) => typeof id === "number") as number[];
+    if (ids.length === 0) return { results: [] };
+
+    // Enrich with details (name, creator, description)
+    let details = new Map<number, { name?: string; creator?: string }>();
+    try {
+      const dparams = new URLSearchParams({ assetIds: ids.join(",") });
+      const dresp = await fetch(`${TOOLBOX_DETAILS_URL}?${dparams.toString()}`, { headers: httpHeaders(robloxApiKey), signal: AbortSignal.timeout(7000) });
+      if (dresp.ok) {
+        const dbody = await dresp.json();
+        const ddata = Array.isArray(dbody?.data) ? dbody.data : [];
+        for (const item of ddata) {
+          const id = item?.asset?.id;
+          if (typeof id === "number") {
+            details.set(id, { name: item.asset?.name, creator: item?.creator?.name });
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+
+    const thumbs = await fetchThumbnails(ids);
+    const results: CatalogAsset[] = ids.map((id) => ({
+      id,
+      name: details.get(id)?.name || "Roblox asset",
+      assetType: assetType,
+      itemType: "Asset",
+      creatorName: details.get(id)?.creator || "Unknown",
+      thumbnailUrl: thumbs.get(id) ?? null,
+      rbxAssetId: `rbxassetid://${id}`,
+    }));
+    return { results };
+  } catch {
+    return { results: [] };
+  }
+}
+
+// ── Catalog flow (wearables) — may be rate-limited; callers fall back ────
+async function searchCatalog(keyword: string, subcategoryKey: string): Promise<{ results: CatalogAsset[] }> {
+  const subcategory = CATALOG_SUBCATEGORIES[subcategoryKey] ?? CATALOG_SUBCATEGORIES.all;
   const params = new URLSearchParams({
     Category: "1",
     Subcategory: String(subcategory),
@@ -122,63 +161,89 @@ async function searchRobloxCatalog(keyword: string, categoryKey: string): Promis
     Limit: "10",
     SortType: "0",
   });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000);
   try {
-    const response = await fetch(`https://catalog.roblox.com/v1/search/items/details?${params.toString()}`, {
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!response.ok) return { results: [] };
-    const body = await response.json();
+    const resp = await fetch(`${CATALOG_URL}?${params.toString()}`, { headers: httpHeaders(), signal: AbortSignal.timeout(6000) });
+    if (!resp.ok) return { results: [] };
+    const body = await resp.json();
     const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
-
-    // Fetch thumbnails
-    const ids = items.map((i: Record<string, unknown>) => i.id).filter((id: unknown) => typeof id === "number");
-    let thumbMap = new Map<number, string>();
-    if (ids.length > 0) {
-      try {
-        const thumbParams = new URLSearchParams({
-          assetIds: ids.join(","),
-          size: "150x150",
-          format: "Png",
-          isCircular: "false",
-        });
-        const thumbResp = await fetch(`https://thumbnails.roblox.com/v1/assets?${thumbParams.toString()}`, {
-          headers: { Accept: "application/json" },
-        });
-        if (thumbResp.ok) {
-          const thumbBody = await thumbResp.json();
-          const thumbData = Array.isArray(thumbBody?.data) ? thumbBody.data : [];
-          for (const entry of thumbData) {
-            if (typeof entry.targetId === "number" && typeof entry.imageUrl === "string") {
-              thumbMap.set(entry.targetId, entry.imageUrl);
-            }
-          }
-        }
-      } catch { /* thumbnails are best-effort */ }
-    }
-
+    const ids = items.map((i: Record<string, unknown>) => i.id).filter((id: unknown) => typeof id === "number") as number[];
+    const thumbs = await fetchThumbnails(ids);
     const results: CatalogAsset[] = items.map((item: Record<string, unknown>) => ({
       id: item.id as number,
       name: item.name as string,
       assetType: item.assetType as number | undefined,
       itemType: item.itemType as string | undefined,
       creatorName: item.creatorName as string | undefined,
-      thumbnailUrl: thumbMap.get(item.id as number) ?? null,
+      thumbnailUrl: thumbs.get(item.id as number) ?? null,
       rbxAssetId: `rbxassetid://${item.id}`,
     }));
     return { results };
   } catch {
-    clearTimeout(timeout);
     return { results: [] };
   }
+}
+
+async function searchRobloxCatalog(keyword: string, categoryKey: string): Promise<{ results: CatalogAsset[] }> {
+  const catLower = (categoryKey || "").toLowerCase();
+
+  // Faces, decals, meshes, images, models, audio → toolbox flow (reliable)
+  if (catLower in TOOLBOX_TYPES) {
+    return searchToolbox(keyword, TOOLBOX_TYPES[catLower]);
+  }
+
+  // Wearables (hats, hair, gear, …) → try catalog, fall back to toolbox decals
+  let { results } = await searchCatalog(keyword, catLower);
+  if (results.length === 0) {
+    results = (await searchToolbox(keyword, TOOLBOX_TYPES.decals)).results;
+  }
+  return { results };
 }
 
 function json(request: Request, body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: corsHeadersFor(request) });
 }
+
+// ─── Retrox building-skill system prompt ──────────────────────────────────────
+const BUILDING_SKILLS = `
+
+You are Retrox, the resident AI builder inside RetroStudio. You are a Luau and
+Roblox engineering expert. Follow these rules when you build:
+
+POSITIONING (most important):
+- Place parts precisely with CFrame.new(x, y, z) — a part's position is its center.
+- To position relative to another part: part.CFrame = ref.CFrame * CFrame.new(0, 5, 0)
+  offsets are in the REFERENCE part's local space (Y up, -Z forward).
+- For whole models use Model:PivotTo(CFrame) or Model:MoveTo(Vector3) — never loop
+  over children setting .Position (it breaks welds and relative layout).
+- Relative math: for spacing n studs between 4-stud-thick walls, step by (thickness + n).
+- Reorient with CFrame.Angles(math.rad(deg), 0, 0) or CFrame.fromEulerAnglesXYZ.
+
+BUILD QUALITY:
+- Anchor every structural part you place (Anchored = true) unless it must move.
+- Connect moving parts to a static anchor with WeldConstraint (Part0 = anchor, Part1 = mover).
+- Set Material, Color, Transparency, and Reflectance thoughtfully.
+- Use TweenService for doors, platforms, and pop-up effects.
+- Fire/Sparkles/ParticleEmitter for FX, PointLight/SpotLight for lighting.
+- ClickDetector or ProximityPrompt for interactions, CollectionService for batches.
+
+STRUCTURE & STYLE:
+- Group related parts into Models with a PrimaryPart set.
+- Give variables clear names (wallFront, roofPanel, leverBase).
+- Add short "--" comments explaining key numbers (positions, sizes).
+
+ROBLOX ASSETS:
+- You cannot import raw 3D geometry. You CAN reference real catalog assets by ID:
+  set Decal.Texture, SpecialMesh.MeshId, or MeshPart.MeshId to "rbxassetid://<id>".
+- When a user wants a face, decal, hat, or mesh, call search_roblox_catalog FIRST
+  to find real asset IDs. Review up to 5 results, pick the best match, and embed
+  its rbxassetid:// in your code. Always say which asset you chose and why.
+- If the user just wants an asset ID, give the ID + name + creator directly.
+- NEVER invent an asset ID.
+
+RESPONSE FORMAT:
+- Plain text only — no markdown, no **, no triple backticks, no headers with #.
+- Lead with one short sentence about what you built, then the Luau code.
+- Keep code complete and paste-ready.`;
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -186,6 +251,12 @@ Deno.serve(async (request) => {
   }
   if (request.method !== "POST") {
     return json(request, { error: "Method not allowed" }, 405);
+  }
+
+  // Origin enforcement: only the production frontends may call this service.
+  const origin = request.headers.get("Origin") || "";
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    return json(request, { error: "Forbidden origin" }, 403);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -225,13 +296,12 @@ Deno.serve(async (request) => {
     return json(request, { error: "That mode is unavailable for Free AI" }, 403);
   }
 
-  // ── Token deduction (first pass: 1 token) ──────────────────────────────
-  // If the AI triggers a live catalog search, we deduct a 2nd token after.
+  // ── Token deduction (first pass: base cost, server-decided) ─────────────
   type TokenRow = { tokens_remaining?: number; reset_at?: string | null; tokens_charged?: number };
   let creditRows: TokenRow | TokenRow[] | null = null;
   let creditError: { message?: string } | null = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const result = await userClient.rpc("consume_free_ai_tokens", { p_count: 1 });
+    const result = await userClient.rpc("consume_free_ai_tokens", { p_count: CHARGE_BASE });
     creditRows = result.data;
     creditError = result.error;
     if (!creditError) break;
@@ -246,22 +316,13 @@ Deno.serve(async (request) => {
   }
   let credit = Array.isArray(creditRows) ? creditRows[0] : creditRows;
   let tokensRemaining = Number(credit?.tokens_remaining ?? 0);
+  let tokensCharged = Number(credit?.tokens_charged ?? CHARGE_BASE);
 
   await new Promise((resolve) => setTimeout(resolve, 900));
-  const maxCompletionTokens = mode === "plan" ? 700 : 900;
+  const maxCompletionTokens = 4096;
+  const reasoningEffort = mode === "plan" || mode === "think" ? "medium" : "low";
 
-  const groundedSystem =
-    system +
-    "\n\nYou are Retrox, built into RetroStudio. You cannot import raw 3D model geometry. " +
-    "You CAN reference real, existing Roblox catalog assets by ID — set Decal.Texture, " +
-    "SpecialMesh.MeshId, or MeshPart.MeshId to \"rbxassetid://<id>\". " +
-    "When a user wants a face, decal, hat, or accessory, call search_roblox_catalog first " +
-    "to find real asset IDs. The search returns up to 5 results — review them, pick the " +
-    "best-matching one, and embed its rbxassetid:// in your code. " +
-    "Always explain which asset you chose and why. " +
-    "If the user just wants a decal or mesh ID without a full build, give them the ID directly " +
-    "with the asset name and creator — no need to write a full Luau script. " +
-    "Never invent an asset ID.";
+  const groundedSystem = system + BUILDING_SKILLS;
 
   const conversation: Array<Record<string, unknown>> = [
     { role: "system", content: groundedSystem },
@@ -271,37 +332,47 @@ Deno.serve(async (request) => {
   let finalContent: string | null = null;
   let assetsFound: CatalogAsset[] = [];
   let usedToolCall = false;
+  let usedModel = GROQ_MODELS[0];
 
   for (let round = 0; round < 2; round += 1) {
-    let groqResponse: Response;
-    try {
-      groqResponse = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${groqKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: conversation,
-          max_completion_tokens: maxCompletionTokens,
-          temperature: 0.6,
-          include_reasoning: false,
-          ...(round === 0 ? { tools: [CATALOG_TOOL], tool_choice: "auto" } : {}),
-        }),
-      });
-    } catch {
-      return json(request, { error: "Free AI provider is unavailable; one token was used" }, 503);
-    }
+    let groqResponse: Response | null = null;
+    let groqBody: any = null;
+    let lastError = "provider unavailable";
 
-    let groqBody: any;
-    try {
-      groqBody = await groqResponse.json();
-    } catch {
-      return json(request, { error: "Free AI provider returned an invalid response" }, 502);
+    // Provider fallback chain: primary model, then fallback model.
+    for (const model of GROQ_MODELS) {
+      try {
+        const response = await fetch(GROQ_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${groqKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: conversation,
+            max_completion_tokens: maxCompletionTokens,
+            temperature: 0.6,
+            include_reasoning: false,
+            reasoning_effort: reasoningEffort,
+            ...(round === 0 ? { tools: [CATALOG_TOOL], tool_choice: "auto" } : {}),
+          }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const parsed = await response.json().catch(() => null);
+        if (response.ok && parsed) {
+          groqResponse = response;
+          groqBody = parsed;
+          usedModel = model;
+          break;
+        }
+        lastError = parsed?.error?.message || `status ${response.status}`;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : "network error";
+      }
     }
-    if (!groqResponse.ok) {
-      return json(request, { error: "Free AI provider is unavailable; one token was used" }, 502);
+    if (!groqResponse || !groqBody) {
+      return json(request, { error: "Free AI provider is unavailable; " + tokensCharged + " token(s) were used" }, 502);
     }
 
     const message = groqBody?.choices?.[0]?.message;
@@ -314,12 +385,11 @@ Deno.serve(async (request) => {
         let args: { keyword?: string; category?: string } = {};
         try { args = JSON.parse(call.function?.arguments || "{}"); } catch {}
         const { results } = await searchRobloxCatalog(String(args.keyword || ""), String(args.category || "all"));
-        // Collect all assets found across all tool calls
         assetsFound = assetsFound.concat(results).slice(0, 5);
-        const toolResult = JSON.stringify({ results: results.map(r => ({
+        const toolResult = JSON.stringify({ results: results.map((r) => ({
           id: r.id, name: r.name, rbxAssetId: r.rbxAssetId,
           creatorName: r.creatorName, thumbnailUrl: r.thumbnailUrl,
-        }))});
+        })) });
         conversation.push({ role: "tool", tool_call_id: call.id, content: toolResult });
       }
       continue;
@@ -329,14 +399,16 @@ Deno.serve(async (request) => {
     break;
   }
 
-  // ── If live search was used, deduct a 2nd token ────────────────────────
+  // ── If live catalog search was used, charge the extra credits ───────────
   if (usedToolCall) {
-    const { data: extraCredit, error: extraError } = await userClient.rpc("consume_free_ai_tokens", { p_count: 1 });
+    const { data: extraCredit, error: extraError } = await userClient.rpc("consume_free_ai_tokens", { p_count: CHARGE_SEARCH_EXTRA });
     if (!extraError) {
       const extra = Array.isArray(extraCredit) ? extraCredit[0] : extraCredit;
-      tokensRemaining = Number(extra?.tokens_remaining ?? tokensRemaining - 1);
+      tokensRemaining = Number(extra?.tokens_remaining ?? tokensRemaining - CHARGE_SEARCH_EXTRA);
+      tokensCharged += Number(extra?.tokens_charged ?? CHARGE_SEARCH_EXTRA);
     } else {
-      tokensRemaining = Math.max(0, tokensRemaining - 1);
+      tokensRemaining = Math.max(0, tokensRemaining - CHARGE_SEARCH_EXTRA);
+      tokensCharged += CHARGE_SEARCH_EXTRA;
     }
   }
 
@@ -344,11 +416,19 @@ Deno.serve(async (request) => {
     return json(request, { error: "Free AI returned no usable response" }, 502);
   }
 
+  // Plain-text hygiene: strip markdown fences if the model added them anyway.
+  let content = finalContent;
+  content = content.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
+  if (content.trim().length === 0) {
+    return json(request, { error: "Free AI returned no usable response" }, 502);
+  }
+
   return json(request, {
-    content: finalContent,
+    content,
     tokens_remaining: tokensRemaining,
+    tokens_used: tokensCharged,
     reset_at: credit?.reset_at ?? null,
-    model: GROQ_MODEL,
+    model: usedModel,
     used_live_search: usedToolCall,
     assets_found: assetsFound,
   });
