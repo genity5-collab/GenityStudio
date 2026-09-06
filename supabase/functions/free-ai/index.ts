@@ -422,6 +422,13 @@ BUILD QUALITY:
   Do NOT set part.Color = Color3.fromRGB(...) on Parts — it does not render
   correctly in RetroStudio. Color3 is correct ONLY for UI (GuiObject.BackgroundColor3,
   TextColor3) — never for Parts.
+  * Need a precise custom shade that isn't a standard named BrickColor? Use the
+    conversion block instead of guessing a name:
+      local wallColor = Color3ToBrickColor(Color3.fromRGB(180, 140, 100))
+      wall.BrickColor = wallColor
+    (Color3ToBrickColor is a real block here — write it exactly like this, one
+    local assignment then a plain .BrickColor = variable line, nothing else on
+    those two lines.)
 - Set Material and Transparency thoughtfully alongside BrickColor.
 - Use TweenService for doors, platforms, and pop-up effects.
 - Fire/Sparkles/ParticleEmitter for FX, PointLight/SpotLight for lighting.
@@ -614,6 +621,8 @@ MODEL-FIRST BUILD ORDER (required for every build that creates a physical model)
       - Colors: part.BrickColor = BrickColor.new("Color name") — ALWAYS use
         BrickColor for Parts, never part.Color = Color3.fromRGB(...) (see the
         COLOR RULE above — Color3 on a Part does not render correctly here).
+        For a precise custom shade use Color3ToBrickColor(Color3.fromRGB(r,g,b))
+        (see COLOR RULE) instead of guessing a named color.
       - part.Material = Enum.Material.X. Instance.new("Part", workspace) with
         the parent argument. Do NOT call game:GetService in model scripts —
         use the bare workspace global.
@@ -710,21 +719,16 @@ Deno.serve(async (request) => {
   const groqKey = Deno.env.get("GROQ_API_KEY");
   const openrouterKey = Deno.env.get("OPENROUTER_API_KEY");
 
-  // Provider fallback chain: Groq gpt-oss-20b -> Groq llama-3.3-70b -> OpenRouter gpt-oss-20b
+  // Provider fallback chain — gpt-oss-20b ONLY, no other model, ever:
+  // 1) OpenRouter free tier -> 2) OpenRouter paid tier -> 3) Groq
   type Provider = { name: string; url: string; key: string; model: string };
   const PROVIDERS: Provider[] = [];
+  if (openrouterKey) {
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b:free" });
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b" });
+  }
   if (groqKey) {
     PROVIDERS.push({ name: "groq", url: GROQ_URL, key: groqKey, model: "openai/gpt-oss-20b" });
-    PROVIDERS.push({ name: "groq", url: GROQ_URL, key: groqKey, model: "llama-3.3-70b-versatile" });
-  }
-  if (openrouterKey) {
-    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b" });
-    // Deeper last-resort free models: only reached when everything above failed
-    // (e.g. Groq rate-limited AND primary OpenRouter model down). :free variants
-    // have tight OpenRouter rate limits but cost nothing.
-    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "meta-llama/llama-3.3-70b-instruct:free" });
-    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "qwen/qwen-2.5-72b-instruct:free" });
-    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "deepseek/deepseek-chat-v3-0324:free" });
   }
   if (!supabaseUrl || !supabaseAnonKey || PROVIDERS.length === 0) {
     return json(request, { error: "Free AI is temporarily unavailable" }, 503);

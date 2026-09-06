@@ -435,10 +435,12 @@ class LegacySubsetCompiler:
                     continue
             match = re.fullmatch(r"([\w.]+)\.BrickColor\s*=\s*BrickColor\.new\s*\(\s*(['\"])(.*?)\2\s*\)", line)
             if match:
+                # Value MUST be typed BrickColor, not String, or RetroStudio silently
+                # no-ops and never actually sets the color.
                 add(
                     "SetObjectProperty",
                     "Set Object Property",
-                    ESC + "Value" + _typed_value(f'"{match.group(3)}"') + ESC + "Property" + ESC + "0" + ESC + "BrickColor" + ESC + "Object" + ESC + "0" + ESC + match.group(1),
+                    ESC + "Value" + ESC + "1" + ESC + _escape_value(match.group(3)) + ESC + "BrickColor" + ESC + "Property" + ESC + "0" + ESC + "BrickColor" + ESC + "Object" + ESC + "0" + ESC + match.group(1),
                 )
                 continue
             match = re.fullmatch(r"([\w.]+)\.Material\s*=\s*Enum\.Material\.(\w+)", line)
