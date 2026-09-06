@@ -4059,7 +4059,7 @@ var B93C="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'()
 var ENC=B93C.split(""),POW=[],i;
 for(i=0;i<=30;i++)POW[i]=Math.pow(2,i);
 function b93enc(bytes){var q=0,c=0,out=[],j,v;for(j=0;j<bytes.length;j++){q+=bytes[j]*POW[c];c+=8;while(c>13){v=q%0x2000;if(v>456){q=Math.floor(q/0x2000);c-=13;}else{v=q%0x4000;q=Math.floor(q/0x4000);c-=14;}out.push(ENC[v%93],ENC[Math.floor(v/93)]);}}if(c>0){out.push(ENC[q%93]);if(c>7||q>92)out.push(ENC[Math.floor(q/93)]);}return out.join("");}
-function deflate(str){var b=new Uint8Array(str.length);for(var k=0;k<str.length;k++)b[k]=str.charCodeAt(k)&0xFF;return pako.deflateRaw(b,{level:6,strategy:0});}
+function deflate(str){var b=new Uint8Array(str.length);for(var k=0;k<str.length;k++)b[k]=str.charCodeAt(k)&0xFF;return pako.deflateRaw(b,{level:9,strategy:0});}
 function esc(s){return san(s).replace(/[\x00-\x1f\x7f]/g,"");}
 
 function san(s){return String(s).replace(/[<>&"']/g,function(c){return{"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"}[c];});}
@@ -4143,7 +4143,7 @@ function buildFromLua(lua){
 
   var blocks=[],counts={},rowIdx=0,warns=[],defFns={};
   var _cx=0,_cy=0;
-  function pos(){var x=rowIdx*3,y=0;if(x>36){y=4;x-=37;}rowIdx++;_cx=x;_cy=y;return hexPos(x,y);}
+  function pos(){var x=rowIdx*3,y=0;while(x>36){x-=37;y+=4;}rowIdx++;_cx=x;_cy=y;return hexPos(x,y);}
   function nextN(base){counts[base]=(counts[base]||0)+1;return base+counts[base];}
   function add(type,base,inp,out,elseC){
     if(!KNOWN[type]){warns.push("Unknown: "+type);return null;}
@@ -4800,9 +4800,9 @@ function reencodeLastAI(content){
     row.setAttribute("data-key",key);
     row.innerHTML='<div class="bwrap"><div class="deep-research-card" style="border-color:rgba(74,222,128,.45)">'+
       '<div class="deep-research-head"><span>ENCODED — '+esc(hdr)+'</span>'+
-      '<span style="font-size:.55rem;color:#4ade80;letter-spacing:.4px">'+(good?(r.blocks+" BLOCKS"):"MANUAL")+'</span></div>'+
+      '<span style="font-size:.55rem;color:#4ade80;letter-spacing:.4px">'+(good?(r.blocks+" BLOCKS · "+Math.round((r.encoded||"").length/102.4)/10+"K CHARS"):"MANUAL")+'</span></div>'+
       '<div style="font-size:.6rem;color:var(--mu);margin-top:6px;line-height:1.45">'+
-      (good?("Block script ready — "+r.blocks+" blocks, "+((r.warns||[]).length)+" skipped lines. Copy and import in RetroStudio.")
+      (good?(("Block script ready — "+r.blocks+" blocks, "+((r.warns||[]).length)+" skipped lines. Copy and import in RetroStudio.")+(((r.encoded||"").length>15000)?'<br><span style="color:#f87171;font-weight:600">WARNING '+((r.encoded||"").length)+' chars — Roblox paste boxes silently truncate anything over 16,384 characters, so this import may FAIL. Ask for a shorter/simpler version (fewer UI decorations or parts) or split the build.</span>':""))
             :"The fixed encoder could not fully encode this script. Copy the Luau source and use the Encode tab.")+'</div>'+
       '<div class="rsx-fx-out" style="margin-top:8px"></div>'+
       '<div class="rsx-fx-actions" style="display:flex;gap:8px;margin-top:8px"></div></div></div>';

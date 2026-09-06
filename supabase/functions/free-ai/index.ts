@@ -626,6 +626,33 @@ ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode
 - If a build is unavoidably complex, still follow every rule above — simplicity is
   what makes the encoder succeed, not shorter code.
 
+SIZE LIMIT — IMPORTS BREAK WHEN TOO BIG (hard rule):
+- The encoded script is pasted into a Roblox TextBox that SILENTLY TRUNCATES anything
+  over 16,384 characters. A pasted-too-long script simply fails to import.
+- Estimate: every Luau line you write is roughly 1 block and every ~40 blocks is
+  ~10,000 encoded chars. HARD CAP: keep EVERY script you output under ~50 blocks
+  (~180 max: 40 for structure + 30 for logic). If the build needs more:
+  * UI: cut decorative properties first — skip UICorner, BackgroundTransparency,
+    Font, TextScaled unless essential. Keep Size/Position/Text/colors only.
+  * Models: fewer, bigger parts rather than many tiny ones; drop redundant detail.
+  * Still over? Output the essentials only and tell the user what you left out.
+
+CORRECTNESS SELF-CHECK (do this silently before printing each script):
+1. Every Instance.new(...) variable gets a Parent assignment exactly once, LAST.
+2. Never touch a child you did not create in this script without FindFirstChild or
+   WaitForChild first.
+3. Only use properties that genuinely exist on that class (part has no .Text, a
+   TextLabel has no .CFrame).
+4. Event names ONLY from the supported list — nothing invented.
+5. Leaderstats: Create Leaderstat and Set Leaderstat blocks are SERVER-ONLY
+   (Regular Script). A GUI LocalScript must never write leaderstats — display
+   values with Get Leaderstat (works everywhere) or fire a RemoteEvent the Main
+   server script listens for.
+6. Workspace references: never reference workspace.MyThing unless the Model Script
+   builds it (and the user runs the Model Script first).
+7. Re-run the logic in your head top to bottom: no variable used before assignment,
+   no nil math, every if has its end, every Connect(function() has its end).
+
 MODEL-FIRST BUILD ORDER (required for every build that creates a physical model):
 - If the build creates ANY physical model/structure (house, shop, stand, pedestal,
   bridge, vehicle, statue, mesh display, or any multi-part construction), you MUST
