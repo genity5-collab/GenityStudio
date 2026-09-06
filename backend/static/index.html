@@ -2881,8 +2881,37 @@ We found your existing local account. After login, your data will be migrated au
     ".live-edit-log{display:none!important}" +
     ".think-label{display:none!important}" +
     "#coderAnim{display:none!important}" +
-    ".live-content{white-space:pre-wrap}";
+    ".live-content{white-space:pre-wrap}" +
+    ".live-bubble.rsx-suppressed{opacity:0;max-height:0;padding-top:0;padding-bottom:0;margin:0;border-width:0;overflow:hidden;pointer-events:none;transition:opacity .2s,max-height .25s}";
   document.head.appendChild(workStyle);
+
+  /* watch for the app's own native "live-bubble" (its in-progress answer
+     preview, e.g. "Preparing a clear build plan..."). Suppress it while our
+     Retrox Core card is running so only ONE working indicator shows; reveal
+     it again once the turn finishes so the real final answer is visible. */
+  var lbObserver = new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (!(n instanceof Element)) continue;
+        var bubbles = n.classList && n.classList.contains("live-bubble") ? [n] : n.querySelectorAll ? n.querySelectorAll(".live-bubble") : [];
+        for (var k = 0; k < bubbles.length; k++) {
+          var b = bubbles[k];
+          if (act && !act.done) {
+            b.classList.add("rsx-suppressed");
+            act.liveBubbleEl = b;
+          }
+        }
+      }
+    }
+  });
+  function watchLiveBubble() {
+    var log = document.getElementById("aiLog");
+    if (log) lbObserver.observe(log, { childList: true, subtree: true });
+    else setTimeout(watchLiveBubble, 500);
+  }
+  watchLiveBubble();
 
   /* ── 3. Token truth: persist server balance, reconcile the HUD ──────────── */
   var srvCredits = null;          /* { v:number, reset:string|null, ts:number } */
@@ -3239,6 +3268,7 @@ We found your existing local account. After login, your data will be migrated au
     if (data) act.credits = Number(data.tokens_used) || act.credits;
     act.done = true;
     clearInterval(act.timer);
+    if (act.liveBubbleEl) { act.liveBubbleEl.classList.remove("rsx-suppressed"); }
     var searches = 0, refs = 0;
     for (var i = 0; i < act.entries.length; i++) {
       if (act.entries[i].cls === "search") searches++;
@@ -3643,6 +3673,8 @@ We found your existing local account. After login, your data will be migrated au
     return have == null || have >= m.price; /* unknown balance: let the server decide */
   }
 
+  var gxErrorActive = false; /* true only while OUR insufficient-credit banner is showing */
+
   function gxInsufficientUI(i) {
     var m = GX_MODES[i];
     var wrap = gxWrap();
@@ -3664,12 +3696,29 @@ We found your existing local account. After login, your data will be migrated au
       st.className = "st err";
       st.style.display = "block";
     }
+    gxErrorActive = true;
+  }
+
+  /* clear OUR own insufficient-credit banner (never touches unrelated errors) */
+  function gxClearError() {
+    if (!gxErrorActive) return;
+    gxErrorActive = false;
+    var st = document.getElementById("aiSt");
+    if (st && st.classList.contains("err")) {
+      st.style.display = "none";
+      st.textContent = "";
+      st.className = "st";
+    }
+    var wrap = gxWrap();
+    var sub = wrap ? wrap.querySelector(".gx-sub") : null;
+    if (sub) sub.style.color = "";
   }
 
   function gxSet(i) {
     i = Math.max(0, Math.min(GX_MODES.length - 1, i));
-    if (i === gxIndex && currentModeId() === GX_MODES[i].id) { gxRender(); return true; }
+    if (i === gxIndex && currentModeId() === GX_MODES[i].id) { gxClearError(); gxRender(); return true; }
     if (!gxAffordable(i)) { gxInsufficientUI(i); gxRender(); return false; }
+    gxClearError();
     var btn = document.querySelector('#modeRow button[data-mode="' + GX_MODES[i].id + '"]');
     gxSuppress = true;
     if (btn) btn.click();
