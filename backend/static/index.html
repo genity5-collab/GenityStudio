@@ -4800,29 +4800,38 @@ function reencodeLastAI(content){
 /* ==== AUTO MODE FIX: <2 BYOK keys -> fall back to Retrox owner-keyed path ==== */
 (function(){
   var lastHit=0;
-  function fixAutoGate(){
+  function fixGate(){
     var st=document.getElementById("aiSt");
     if(!st)return;
     var t=String(st.textContent||"");
-    if(t.indexOf("Auto mode needs at least 2 API keys")<0)return;
+    var isAutoGate=t.indexOf("Auto mode needs at least 2 API keys")>=0;
+    var isKeyGate=t.indexOf("Save an API key for the selected provider")>=0;
+    if(!isAutoGate&&!isKeyGate)return;
     if(Date.now()-lastHit<15000)return;
     lastHit=Date.now();
-    st.textContent="Auto needs 2+ provider keys - switching to Retrox (owner keys)...";
+    st.textContent="Switching to Retrox (owner keys)...";
     var log=document.getElementById("aiLog");
-    if(log){var d=document.createElement("div");d.textContent="Auto needs 2+ provider keys - using Retrox owner keys instead (Normal mode)";d.style.cssText="color:#7ee2a8;font-size:.7rem";log.appendChild(d);log.scrollTop=log.scrollHeight;}
-    var btns=document.querySelectorAll('[data-mode]');
-    var plan=null;
-    for(var i=0;i<btns.length;i++){if(btns[i].getAttribute("data-mode")==="plan"){plan=btns[i];break;}}
-    if(!plan)return;
-    plan.click();
+    if(log){var d=document.createElement("div");d.textContent="No BYOK keys - using Retrox owner keys instead (Normal mode, 2 credits)";d.style.cssText="color:#7ee2a8;font-size:.7rem";log.appendChild(d);log.scrollTop=log.scrollHeight;}
+    /* 1) switch provider to Retrox (free pill) */
+    var pills=document.querySelectorAll('[data-provider="free"]');
+    for(var i=0;i<pills.length;i++){try{pills[i].click();}catch(e){}}
+    var prov=document.getElementById("prov");
+    if(prov){prov.value="free";try{prov.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}}
+    /* 2) if the 2-key Auto gate fired, switch mode to Plan (same 2-credit tier) */
+    if(isAutoGate){
+      var btns=document.querySelectorAll('[data-mode]');
+      for(var j=0;j<btns.length;j++){if(btns[j].getAttribute("data-mode")==="plan"){try{btns[j].click();}catch(e){}break;}}
+    }
+    /* 3) re-send the same prompt through Retrox */
     setTimeout(function(){
       var send=document.getElementById("aiSend");
       var inEl=document.getElementById("aiIn");
       if(send&&inEl&&String(inEl.value||"").trim()){send.click();}
-    },400);
+    },450);
   }
-  setInterval(fixAutoGate,900);
+  setInterval(fixGate,900);
 })();
+
 
 </script>
 </body>
