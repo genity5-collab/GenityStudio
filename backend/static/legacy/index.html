@@ -3355,14 +3355,66 @@ function argsStr(args,pfx){
 /* ===== Lua Parser ===== */
 function buildFromLua(lua){
   var src=(lua||"").replace(/\r\n/g,"\n");
+  src=src.replace(/game\s*:\s*GetService\s*\(\s*["'](\w+)["']\s*\)/g,"$1");
+  src=src.replace(/^[ \t]*local[ \t]+(\w+)[ \t]*=[ \t]*\1[ \t]*$/gim,"");
   var lines=src.split("\n").map(function(l){
     l=l.trim();if(!l||l[0]==="-"&&l[1]==="-"){if(l.length>2&&l[2]==="@"){return l;}return"";}
     var ci=l.indexOf("--"),inS=false,q="";
     if(ci>=0){for(var i=0;i<ci;i++){var c=l[i];if(!inS&&(c==='"'||c==="'"))inS=q=c;else if(inS&&c===q)inS=false;}if(!inS)l=l.slice(0,ci).trim();}
     return l;
   }).filter(Boolean);
+  /* Join statements the AI wrapped across lines (unbalanced parens / trailing separators) */
+  var _jn=[],_jp="";
+  for(var _ji=0;_ji<lines.length;_ji++){
+    _jp=_jp?_jp+" "+lines[_ji]:lines[_ji];
+    var _d=0,_q=null;
+    for(var _k=0;_k<_jp.length;_k++){var _c=_jp[_k];if(_q){if(_c===_q)_q=null;}else if(_c==='"'||_c==="'")_q=_c;else if(_c==="(")_d++;else if(_c===")")_d--;}
+    var _fnHdr=/function\s*\([^)]*\)\s*$/.test(_jp);
+    if(_fnHdr&&_d>0){_jn.push(_jp);_jp="";continue;}
+    if(_d<=0&&!/[,{[(=]$/.test(_jp)&&!/[\-+*/]$/.test(_jp)&&!/\.\.$/.test(_jp)&&!_fnHdr){_jn.push(_jp);_jp="";}
+  }
+  if(_jp)_jn.push(_jp);
+  lines=_jn;
+  /* Inline-expand simple local function calls (model scripts define helpers) */
+  var FN={},_fl=[];
+  for(var fi=0;fi<lines.length;fi++){
+    var fm=lines[fi].match(/^local\s+function\s+(\w+)\s*\(([^)]*)\)\s*$/);
+    if(fm){
+      var _fbody=[],_fd=1,_fj=fi+1;
+      while(_fj<lines.length&&_fd>0){var _bl=lines[_fj];
+        if(/^(?:local\s+)?function\s/.test(_bl))_fd++;
+        if(_bl==="end"||/^end\)/.test(_bl)){_fd--;if(_fd===0){_fj++;break;}}
+        if(_fd>0)_fbody.push(_bl);
+        _fj++;}
+      FN[fm[1]]={params:fm[2].split(",").map(function(pp){return pp.trim();}).filter(Boolean),body:_fbody};
+      fi=_fj-1;continue;
+    }
+    _fl.push(lines[fi]);
+  }
+  lines=_fl;
+  var _exd=true;
+  while(_exd){_exd=false;
+    for(var ei=0;ei<lines.length;ei++){
+      var em=lines[ei].match(/^(\w+)\s*\((.*)\)$/);
+      if(em&&FN[em[1]]){
+        var _F=FN[em[1]],_args=[],_ac="",_ad=0;
+        for(var ci2=0;ci2<em[2].length;ci2++){var _cc=em[2][ci2];if(_cc==="(")_ad++;else if(_cc===")")_ad--;if(_cc===","&&_ad===0){_args.push(_ac.trim());_ac="";}else _ac+=_cc;}
+        if(_ac.trim())_args.push(_ac.trim());
+        var _body2=_F.body.map(function(bl2){var s2=bl2;_F.params.forEach(function(pp,pi){if(pp&&_args[pi]!==undefined)s2=s2.replace(new RegExp("\\b"+pp+"\\b","g"),_args[pi]);});return s2;});
+        lines.splice.apply(lines,[ei,1].concat(_body2));
+        _exd=true;break;
+      }
+    }
+  }
 
   var blocks=[],counts={},rowIdx=0,warns=[],defFns={};
+  /* Constant folding: known numeric locals + safe arithmetic (construction code) */
+  var KN={};
+  function foldLit(e){e=(e||"").trim();if(/^-?[\d.]+$/.test(e))return e;var sub=e.replace(/[A-Za-z_]\w*/g,function(w){return KN.hasOwnProperty(w)?"("+KN[w]+")":w;});if(!/^[0-9+\-*/(). ]+$/.test(sub))return null;try{var v=Function("return ("+sub+")")();}catch(ex){return null;}if(typeof v!=="number"||!isFinite(v))return null;return String(v);}
+  function hexFloat(f){f=Number(f);var neg=f<0?"-":"";f=Math.abs(f);var i=Math.floor(f);var fr=f-i;if(i>4294967295)return null;var hex=i.toString(16).toUpperCase();if(fr>0){var fh=Math.round(fr*4096);if(fh>=4096){fh=0;i++;hex=i.toString(16).toUpperCase();}hex+="."+fh.toString(16).toUpperCase();}return neg+hex;}
+  function litNum(e){var f=foldLit(e);return f===null?null:hexFloat(f);}
+  function numTV(e){var f=foldLit(e);if(f!==null){var hf=hexFloat(f);if(hf!==null)return tv("1",hf,"Number");}e=(e||"").trim();if(/^\w+$/.test(e))return tv("2",e,"");return null;}
+  function legacyColorComponent(n){n=Math.max(0,Math.min(255,Math.round(Number(n)||0)));if(n===0)return "0";if(n===255)return "1";var a=n,b=255;while(b){var t=a%b;a=b;b=t;}var num=n/a,den=255/a,digits="";while(num>0&&digits.length<12){num*=16;var dg=Math.floor(num/den);digits+=dg.toString(16).toUpperCase();num-=dg*den;}return "0."+digits;}
   var _cx=0,_cy=0;
   function pos(){var x=rowIdx*3,y=0;if(x>36){y=4;x-=37;}rowIdx++;_cx=x;_cy=y;return hexPos(x,y);}
   function nextN(base){counts[base]=(counts[base]||0)+1;return base+counts[base];}
@@ -3454,6 +3506,17 @@ function buildFromLua(lua){
   function single(arr){
     var out=[];
     for(var k=0;k<arr.length;k++){var L=arr[k],m;
+      if(/^if\s+.+\s+then$/.test(L)){
+        var _segs=[{c:L.replace(/^if\s+/,"").replace(/\s+then$/,""),b:[]}],_eb=null,_d2=1,_cs=0,_j=k+1;
+        while(_j<arr.length&&_d2>0){var _ln=arr[_j];
+          if(/^if\s+.+\s+then$/.test(_ln)||/^while\s+.+\s+do$/.test(_ln)||/^for\s+.+\s+do$/.test(_ln)||/^(?:local\s+)?function\s/.test(_ln)||/^repeat$/.test(_ln))_d2++;
+          if(_ln==="end"||/^until\s/.test(_ln)){_d2--;if(_d2===0){_j++;break;}else{(_eb!==null?_eb:_segs[_cs].b).push(_ln);_j++;continue;}}
+          if(_d2===1){var _em=_ln.match(/^elseif\s+(.+)\s+then$/);if(_em){_segs.push({c:_em[1],b:[]});_cs++;_j++;continue;}if(_ln==="else"){_eb=[];_j++;continue;}}
+          if(_eb!==null)_eb.push(_ln);else _segs[_cs].b.push(_ln);
+          _j++;}
+        out.push.apply(out,buildIf({segs:_segs,elseB:_eb,next:_j}));k=_j-1;continue;
+      }
+      m=L.match(/^(\w+):AddItem\(([^)]*)\)$/);if(m){var _aa=parseArgs(m[2]);var _ab=add("AddDebrisItem","Add Debris Item",argsStr(_aa,"TUPLEPARAM_Parameters"),"");if(_ab)out.push(_ab);continue;}
       m=L.match(/^print\s*\(\s*["']([^"']*)["']\s*\)$/);if(m){var b=add("Print","Print",ESC+"Text"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^print\s*\(\s*([\w.]+)\s*\)$/);if(m){var b=add("Print","Print",ESC+"Text"+tv("2",m[1],""),"");if(b)out.push(b);continue;}
       m=L.match(/^print\s*\(\s*["']([^"']*)["']\s*,\s*([\w.]+)\s*\)$/);if(m){var pn="_p"+out.length;var b1=add("Concatenate","Concat",ESC+"FirstString"+tv("1",m[1],"String")+ESC+"SecondString"+tv("2",m[2],""),ESC+"Result"+ESC+esc(pn));if(b1)out.push(b1);var b2=add("Print","Print",ESC+"Text"+tv("2",pn,""),"");if(b2)out.push(b2);continue;}
@@ -3486,7 +3549,7 @@ function buildFromLua(lua){
       m=L.match(/^local\s+(\w+)\s*=\s*math\.(huge|pi)\s*$/);if(m){var val=m[2]==="huge"?"7FFFFFFFFFFFFFFF":"3.243F";var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",val,"Number"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*math\.(\w+)\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("MathLibrarySingleInput","Math Single",ESC+"Function"+ESC+"0"+ESC+esc(m[2])+ESC+"Input"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*math\.(\w+)\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)$/);if(m){var b=add("MathLibraryDoubleInput","Math Double",ESC+"Function"+ESC+"0"+ESC+esc(m[2])+ESC+"Input 1"+tv("2",m[3],"")+ESC+"Input 2"+tv("2",m[4],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^local\s+(\w+)\s*=\s*Vector3\.new\s*\((-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\)$/);if(m){var b=add("ConstructVector3","Vector3",ESC+"X"+tv("1",hexN(m[2]),"Number")+ESC+"Y"+tv("1",hexN(m[3]),"Number")+ESC+"Z"+tv("1",hexN(m[4]),"Number"),ESC+"Vector3"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*Vector3\.new\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)$/);if(m){var _va=[numTV(m[2]),numTV(m[3]),numTV(m[4])];if(_va[0]&&_va[1]&&_va[2]){var b=add("ConstructVector3","Vector3",ESC+"X"+_va[0]+ESC+"Y"+_va[1]+ESC+"Z"+_va[2],ESC+"Vector3"+ESC+esc(m[1]));if(b)out.push(b);continue;}}
       m=L.match(/^(?:local\s+(\w+)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\)$/);if(m){var b=add("CreateObject","Create Object",ESC+"Parent"+ESC+"0"+ESC+"script.Parent"+ESC+"ClassName"+ESC+"0"+ESC+esc(m[2]),ESC+"Object"+ESC+esc(m[1]||m[2]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*tonumber\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("MathLibrarySingleInput","To Number",ESC+"Function"+ESC+"0"+ESC+"tonumber"+ESC+"Input"+tv("2",m[2],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(?:typeof|type)\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("TypeOf","Type Of",ESC+"Variable"+tv("2",m[2],""),ESC+"Type"+ESC+esc(m[1]));if(b)out.push(b);continue;}
@@ -3498,20 +3561,30 @@ function buildFromLua(lua){
       m=L.match(/^local\s+(\w+)\s*=\s*tostring\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("ToStringAny","To String",ESC+"Input"+tv("2",m[2],""),ESC+"String"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*not\s+(\w+)$/);if(m){var b=add("NOTAny","NOT",ESC+"Variable"+tv("2",m[2],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*#(\w+)$/);if(m){var b=add("GetTableLength","Get Table Length",ESC+"Table"+ESC+"0"+ESC+esc(m[2]),ESC+"Length"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\+\s*(\w+)$/);if(m){var b=add("Addition","Addition",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*-\s*(\w+)$/);if(m){var b=add("Subtraction","Subtraction",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\*\s*(\w+)$/);if(m){var b=add("Multiplication","Multiplication",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\+\s*(\w+)$/);if(m){var _ka=foldLit(m[2]),_kb=foldLit(m[3]);if(_ka!==null&&_kb!==null)KN[m[1]]=String(Number(_ka)+Number(_kb));var b=add("Addition","Addition",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*-\s*(\w+)$/);if(m){var _ka=foldLit(m[2]),_kb=foldLit(m[3]);if(_ka!==null&&_kb!==null)KN[m[1]]=String(Number(_ka)-Number(_kb));var b=add("Subtraction","Subtraction",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\*\s*(\w+)$/);if(m){var _ka=foldLit(m[2]),_kb=foldLit(m[3]);if(_ka!==null&&_kb!==null)KN[m[1]]=String(Number(_ka)*Number(_kb));var b=add("Multiplication","Multiplication",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\.\.\s*(\w+)$/);if(m){var b=add("Concatenate","Concatenate",ESC+"FirstString"+tv("2",m[2],"")+ESC+"SecondString"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      /* === Construction property family (model scripts) — folded constants + temp constructor vars === */
+      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*Vector3\.new\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)$/);if(m){var _vp=[numTV(m[3]),numTV(m[4]),numTV(m[5])];if(_vp[0]&&_vp[1]&&_vp[2]){var _vn="_v3"+(blocks.length+1);var b=add("ConstructVector3","Vector3",ESC+"X"+_vp[0]+ESC+"Y"+_vp[1]+ESC+"Z"+_vp[2],ESC+"Vector3"+ESC+esc(_vn));if(b)out.push(b);var b2=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",_vn,"")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b2)out.push(b2);continue;}}
+      m=L.match(/^([\w.]+)\.CFrame\s*=\s*CFrame\.new\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)$/);if(m){var _cx1=litNum(m[2]),_cy1=litNum(m[3]),_cz1=litNum(m[4]);if(_cx1!==null&&_cy1!==null&&_cz1!==null){var _cn="_cf"+(blocks.length+1);var b=add("ConstructCFrame","CFrame",ESC+"Rotation"+ESC+"0"+ESC+"0,0,0"+ESC+"Position"+ESC+"0"+ESC+_cx1+","+_cy1+","+_cz1,ESC+"CFrame"+ESC+esc(_cn));if(b)out.push(b);var b2=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",_cn,"")+ESC+"Property"+ESC+"0"+ESC+"CFrame"+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b2)out.push(b2);continue;}}
+      m=L.match(/^([\w.]+)\.Position\s*=\s*Vector3\.new\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)$/);if(m){var _pp=[numTV(m[2]),numTV(m[3]),numTV(m[4])];if(_pp[0]&&_pp[1]&&_pp[2]){var _pn="_v3"+(blocks.length+1);var b=add("ConstructVector3","Vector3",ESC+"X"+_pp[0]+ESC+"Y"+_pp[1]+ESC+"Z"+_pp[2],ESC+"Vector3"+ESC+esc(_pn));if(b)out.push(b);var b2=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",_pn,"")+ESC+"Property"+ESC+"0"+ESC+"Position"+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b2)out.push(b2);continue;}}
+      m=L.match(/^([\w.]+)\.BrickColor\s*=\s*BrickColor\.new\s*\(\s*(["'][^"']*["']|\w+)\s*\)$/);if(m){var _bv=m[3];var _bt=/^["']/.test(_bv)?tv("1",_bv.slice(1,-1),"String"):tv("2",_bv,"");var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+_bt+ESC+"Property"+ESC+"0"+ESC+"BrickColor"+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
+      m=L.match(/^([\w.]+)\.Color\s*=\s*Color3\.fromRGB\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)$/);if(m){var _c1=foldLit(m[2]),_c2=foldLit(m[3]),_c3=foldLit(m[4]);if(_c1!==null&&_c2!==null&&_c3!==null){var _cn2="_col"+(blocks.length+1);var b=add("ConstructColor3","Construct Color3",ESC+"R"+tv("1",legacyColorComponent(_c1),"Number")+ESC+"G"+tv("1",legacyColorComponent(_c2),"Number")+ESC+"B"+tv("1",legacyColorComponent(_c3),"Number"),ESC+"Color3"+ESC+esc(_cn2));if(b)out.push(b);var b2=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",_cn2,"")+ESC+"Property"+ESC+"0"+ESC+"Color"+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b2)out.push(b2);continue;}}
+      m=L.match(/^([\w.]+)\.Material\s*=\s*Enum\.Material\.(\w+)$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",m[2],"String")+ESC+"Property"+ESC+"0"+ESC+"Material"+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
+      m=L.match(/^(?:local\s+(\w+)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\s*,\s*([\w.]+)\s*\)$/);if(m){var b=add("CreateObject","Create Object",ESC+"Parent"+ESC+"0"+ESC+esc(m[3])+ESC+"ClassName"+ESC+"0"+ESC+esc(m[2]),ESC+"Object"+ESC+esc(m[1]||m[2]));if(b)out.push(b);continue;}
+
       /* SetObjectProperty — order: Value, Property, Object */
       m=L.match(/^([\w.]+)\.((\w+))\s*=\s*([\w.]+)\.((\w+))\s*([+\-\*])\s*(-?[\d.]+)$/);if(m&&m[1]===m[4]&&m[2]===m[5]){var op=m[7],nval=m[8],propN=m[2],objN=m[1];var opType=op==="+"?"Addition":op==="-"?"Subtraction":"Multiplication";var tmpV="_tmp"+propN;var bGet=add("GetObjectProperty","Get Object Property",ESC+"Object"+ESC+"0"+ESC+esc(objN)+ESC+"Property"+ESC+"0"+ESC+esc(propN),ESC+"Value"+ESC+esc(tmpV));if(bGet)out.push(bGet);var bOp=add(opType,opType,ESC+"Value 1"+tv("2",tmpV,"")+ESC+"Value 2"+tv("1",hexN(nval),"Number"),ESC+"Result"+ESC+esc(tmpV+"R"));if(bOp)out.push(bOp);var bSet=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",tmpV+"R","")+ESC+"Property"+ESC+"0"+ESC+esc(propN)+ESC+"Object"+ESC+"0"+ESC+esc(objN),"");if(bSet)out.push(bSet);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*nil$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","","Nil")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
-      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(-?[\d.]+)$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",hexN(m[3]),"Number")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
+      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(-?[\d.]+)$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",hexFloat(m[3]),"Number")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*["']([^"']*)["']$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",m[3],"String")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(true|false)$/i);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",m[3].toLowerCase()==="true"?"1":"0","Bool")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*nil$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","","Nil")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*true$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","1","Bool")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*false$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","0","Bool")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(\w+)$/);if(m&&m[3]!=="nil"&&m[3]!=="true"&&m[3]!=="false"){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",m[3],"")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
+      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*([A-Za-z0-9_.][\w.+\-*/ ]*[+\-*/][\w.+\-*/ ]*)$/);if(m){var _pf=litNum(m[3]);if(_pf!==null){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",_pf,"Number")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}}
       /* GetObjectProperty */
       m=L.match(/^local\s+(\w+)\s*=\s*([\w.]+)\.(\w+)$/);if(m&&m[2]!=="Object"&&!(m[2]==="Instance"&&m[3]==="new")){var b=add("GetObjectProperty","Get Object Property",ESC+"Object"+ESC+"0"+ESC+esc(m[2])+ESC+"Property"+ESC+"0"+ESC+esc(m[3]),ESC+"Value"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       /* Table get/set */
@@ -3522,7 +3595,8 @@ function buildFromLua(lua){
       /* SetVariable1 — inputs: Value(typed), outputs: VariableName */
       m=L.match(/^(?:local\s+)?(\w+)\s*=\s*(true|false)$/i);if(m){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",m[2].toLowerCase()==="true"?"1":"0","Bool"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^(?:local\s+)?(\w+)\s*=\s*nil$/);if(m){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1","","Nil"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^(?:local\s+)?(\w+)\s*=\s*(-?[\d.]+)$/);if(m){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",hexN(m[2]),"Number"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^(?:local\s+)?(\w+)\s*=\s*([\w.]+(?:\s*[+\-*/]\s*[\w.]+)+)$/);if(m){var _lf=foldLit(m[2]);if(_lf!==null){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",hexFloat(_lf),"Number"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);KN[m[1]]=_lf;continue;}}
+      m=L.match(/^(?:local\s+)?(\w+)\s*=\s*(-?[\d.]+)$/);if(m){KN[m[1]]=m[2];var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",hexFloat(m[2]),"Number"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^(?:local\s+)?(\w+)\s*=\s*["']([^"']*)["']$/);if(m){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",m[2],"String"),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^(?:local\s+)?(\w+)\s*=\s*(\w+)$/);if(m){var b=add("SetVariable1","Set Variable",ESC+"Value"+tv("2",m[2],""),ESC+"VariableName"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       /* spawn / call */
@@ -3642,7 +3716,7 @@ m=l.match(/^repeat$/);if(m){var r=grabBody(i+1);i=r.next;var bb=single(r.body);v
     m=l.match(/^local\s+(\w+)\s*=\s*os\.clock\(\)$/);if(m){var b=add("OsClock","OS Clock","",ESC+"Answer"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*os\.time\(\)$/);if(m){var b=add("OsTime","OS Time","",ESC+"Answer"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*os\.date\(([^)]*)\)$/);if(m){var a=parseArgs(m[2]);var b=add("OsDate","OS Date",argsStr(a,"TUPLEPARAM_Parameters"),ESC+"DateTable"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
-    m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\/\s*(.+)$/);if(m){var a=parseArgs(m[3])[0]||{t:"2",v:m[3],tn:""};var b=add("Division","Division",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv(a.t,a.v,a.tn),ESC+"Result"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
+    m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\/\s*(.+)$/);if(m){var _ka=foldLit(m[2]),_kb=foldLit(m[3]);if(_ka!==null&&_kb!==null&&Number(_kb)!==0)KN[m[1]]=String(Number(_ka)/Number(_kb));var a=parseArgs(m[3])[0]||{t:"2",v:m[3],tn:""};var b=add("Division","Division",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv(a.t,a.v,a.tn),ESC+"Result"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\^\s*(.+)$/);if(m){var a=parseArgs(m[3])[0]||{t:"2",v:m[3],tn:""};var b=add("Exponentiation","Exponentiation",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv(a.t,a.v,a.tn),ESC+"Result"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\s*%%\s*(.+)$/);if(m){var a=parseArgs(m[3])[0]||{t:"2",v:m[3],tn:""};var b=add("Modulus","Modulus",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv(a.t,a.v,a.tn),ESC+"Result"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\s+and\s+(\w+)$/);if(m){var b=add("ANDAny","AND",ESC+"A"+tv("2",m[2],"")+ESC+"B"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}

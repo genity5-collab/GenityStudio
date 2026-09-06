@@ -57,8 +57,17 @@ def _escape_value(value: str) -> str:
 
 def _hex_number(value: str) -> str:
     raw = value.replace("_", "").strip()
-    number = int(float(raw), 0) if raw.lower().startswith(("0x", "-0x", "0b", "-0b")) else int(float(raw))
-    return format(max(0, number), "X")
+    number = float(raw)
+    if number <= 0:
+        return "0"
+    integer = int(number)
+    fraction = number - integer
+    if fraction <= 0:
+        return format(integer, "X")
+    scaled = round(fraction * 4096)
+    if scaled >= 4096:
+        return format(integer + 1, "X")
+    return format(integer, "X") + "." + format(scaled, "X")
 
 
 def _typed_value(value: str) -> str:
@@ -398,7 +407,7 @@ class LegacySubsetCompiler:
                     add(
                         "ConstructCFrame",
                         "CFrame",
-                        ESC + "Rotation" + ESC + "0" + ESC + "0,0,0" + ESC + "Position" + ESC + "0" + ESC + ",".join((x, y, z)),
+                        ESC + "Rotation" + ESC + "0" + ESC + "0,0,0" + ESC + "Position" + ESC + "0" + ESC + ",".join(_hex_number(v) for v in (x, y, z)),
                         ESC + "CFrame" + ESC + "_cframe0",
                     )
                     add(
@@ -630,7 +639,7 @@ class LegacySubsetCompiler:
             return str(integer // 255)
         numerator, denominator = (integer / 255).as_integer_ratio()
         digits: list[str] = []
-        while numerator:
+        while numerator and len(digits) < 12:
             numerator *= 16
             digit, numerator = divmod(numerator, denominator)
             digits.append(format(digit, "X"))
