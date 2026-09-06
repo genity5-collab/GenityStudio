@@ -19,6 +19,7 @@ function corsHeadersFor(request: Request): Record<string, string> {
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const HF_URL = "https://router.huggingface.co/v1/chat/completions";
 const FREE_MODES = new Set(["auto", "fast", "plan", "think", "long", "coder"]);
 // Mode-based pricing, charged through the existing consume_free_ai_tokens RPC
 // (which clamps each charge to 1..6). The client never sends a cost.
@@ -547,10 +548,11 @@ ROBLOX ASSETS:
   always, even if you think you already know an ID. Review the up to 5 results,
   pick the best match, and embed its rbxassetid:// in your code.
   * Finding an asset is NOT enough — the FINAL Luau script you output MUST
-    actually contain the resulting property assignment (Decal.Texture,
-    SpecialMesh.MeshId/TextureId, or Sound.SoundId) wired to a real part/model
-    in the build. A build that mentions a found asset in chat but doesn't use
-    it in the code is INCOMPLETE — always wire it in.
+    literally contain the rbxassetid://<id> string of the chosen asset inside a
+    real property assignment (Decal.Texture, SpecialMesh.MeshId/TextureId, or
+    Sound.SoundId) wired to a real part/model in the build. A build that mentions
+    a found asset in chat but omits the ID from the code is INCOMPLETE — always
+    wire it in. Copy the ID digits EXACTLY as the search returned them.
   * Always end with one line naming the chosen asset: "Chosen asset:
   <name> (ID <id>) — <short reason>."
 - If a search returns no usable results, try again once with a broader or
@@ -712,9 +714,14 @@ MODEL-FIRST BUILD ORDER (required for every build that creates a physical model)
       sounds, etc.).
     * Preface it with where to place it, e.g.:
       "Place this in ServerScriptService (regular Script):"
-  If the build has logic, both scripts are required — the model script first,
-  always. If the build is pure model with no logic, output only the model script
-  with the run-in-studio instruction.
+  ORDER IS ABSOLUTE, IN EVERY MODE (Fast/Normal/Think/Long/Coder): the build
+  response ALWAYS starts with Script 1 — Model, and the Main logic script ALWAYS
+  comes after it. Even if the request is small, or is mostly logic, or needs no
+  physical parts — still output the Model Script first (if there is truly nothing
+  to build, keep it minimal and end it with the same print line), then Script 2 —
+  Main. NEVER output the logic first, never combine the two into one script, never
+  skip the Model Script. If the build is pure model with no logic, output only the
+  model script with the run-in-studio instruction.
 - Use this exact header format for each script block, followed by a 1-2 sentence
   summary of THAT script, then its code:
   "Script 1 — Model (run once in Studio)"
@@ -785,7 +792,7 @@ Deno.serve(async (request) => {
   const openrouterKey = Deno.env.get("OPENROUTER_API_KEY");
 
   // Provider fallback chain — gpt-oss-20b ONLY, no other model, ever:
-  // 1) OpenRouter free tier -> 2) OpenRouter paid tier -> 3) Groq
+  // 1) OpenRouter free tier -> 2) OpenRouter paid tier -> 3) Groq -> 4) Hugging Face
   type Provider = { name: string; url: string; key: string; model: string };
   const PROVIDERS: Provider[] = [];
   if (openrouterKey) {
@@ -794,6 +801,10 @@ Deno.serve(async (request) => {
   }
   if (groqKey) {
     PROVIDERS.push({ name: "groq", url: GROQ_URL, key: groqKey, model: "openai/gpt-oss-20b" });
+  }
+  const hfKey = Deno.env.get("HF_TOKEN");
+  if (hfKey) {
+    PROVIDERS.push({ name: "hf", url: HF_URL, key: hfKey, model: "openai/gpt-oss-20b" });
   }
   if (!supabaseUrl || !supabaseAnonKey || PROVIDERS.length === 0) {
     return json(request, { error: "Free AI is temporarily unavailable" }, 503);
@@ -1083,10 +1094,20 @@ Deno.serve(async (request) => {
         thumbnail_url: r.thumbnailUrl,
       })),
     });
-    const toolResult = JSON.stringify({ results: results.map((r) => ({
-      id: r.id, name: r.name, rbxAssetId: r.rbxAssetId,
-      creatorName: r.creatorName, thumbnailUrl: r.thumbnailUrl,
-    })) });
+    const assignHint: Record<string, string> = {
+      mesh: "SpecialMesh.MeshId (and TextureId if a texture asset was found)",
+      decal: "Decal.Texture",
+      texture: "Decal.Texture",
+      sound: "Sound.SoundId",
+    };
+    const toolResult = JSON.stringify({
+      instruction: "MANDATORY: pick the best result and write its rbxAssetId VERBATIM into the final Luau code — the ID string must literally appear in a real property assignment on a real part. A build that mentions the asset in chat but omits the ID from the code is INCOMPLETE.",
+      results: results.map((r) => ({
+        id: r.id, name: r.name, rbxAssetId: r.rbxAssetId,
+        creatorName: r.creatorName, thumbnailUrl: r.thumbnailUrl,
+        putItIn: assignHint[record.kind] || "Decal.Texture",
+      })),
+    });
     conversation.push({ role: "tool", tool_call_id: call.id, content: toolResult });
   }
 
@@ -1199,8 +1220,8 @@ Deno.serve(async (request) => {
   }
 
   if (!finalContent) {
-    const detail = providerErrors.length ? ` (${providerErrors.slice(0, 3).join("; ")})` : "";
-    const errPayload = { error: "Free AI returned no usable response" + detail, status: 502 };
+    if (providerErrors.length) console.log("provider errors:", providerErrors.join(" | "));
+    const errPayload = { error: "Retrox rate limit has hit please retry again tomorrow, or 1 hour", status: 429 };
     if (streamController) {
       sse("error", errPayload);
       try { streamController.close(); } catch { /* already closed */ }
@@ -1219,7 +1240,7 @@ Deno.serve(async (request) => {
   content = content.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, "$1$2");
   content = content.replace(/^\s*-{3,}\s*$/gm, "");
   if (content.trim().length === 0) {
-    const errPayload = { error: "Free AI returned no usable response (empty after plain-text cleanup)", status: 502 };
+    const errPayload = { error: "Retrox rate limit has hit please retry again tomorrow, or 1 hour", status: 429 };
     if (streamController) {
       sse("error", errPayload);
       try { streamController.close(); } catch { /* already closed */ }
