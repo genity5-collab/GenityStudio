@@ -450,13 +450,19 @@ UI BUILDS (ScreenGui / menus / HUDs / shops / dialogs):
   Prefer scale-based layout (e.g. UDim2.new(0.4, 0, 0.5, 0)) so it holds up on
   different screen sizes; use offset pixels only for fixed-size details like
   padding or icon sizes.
-- AnchorPoint (Vector2.new(0.5,0.5)) + Position at the 0.5,0.5 scale point is
-  the standard way to center a Frame on screen.
-- Style with real properties: BackgroundColor3, BackgroundTransparency,
-  TextColor3, TextScaled or TextSize, Font (Enum.Font.SourceSansBold etc.).
-  Add UICorner (CornerRadius = UDim.new(0, 8)) for rounded panels and
-  UIListLayout / UIGridLayout + UIPadding for clean automatic spacing instead
-  of manually positioning every child.
+- NO AnchorPoint — it does not exist in RetroStudio (2010-era UI). To center
+  a Frame, subtract half its size manually: Position = UDim2.new(0.5, -160, 0.5, -110)
+  for a 320x220 panel. Never write Vector2.new for GUIs.
+- Style ONLY with 2010 properties: BackgroundColor3, BackgroundTransparency,
+  TextColor3, TextScaled, TextWrapped, Font (use Enum.Font.ArialBold or
+  Enum.Font.Legacy — 2010-era fonts), ZIndex, Visible, Enabled.
+- RETROSTUDIO UI CLASS WHITELIST — these are the ONLY GUI classes that exist:
+  ScreenGui, Frame, ScrollingFrame, TextLabel, TextButton, TextBox, ImageLabel,
+  ImageButton. NOTHING else: NO UICorner, NO UIListLayout/UIGridLayout, NO
+  UIPadding, NO UIStroke, NO UIGradient — Instance.new of any UI* modifier
+  ERRORS and breaks the whole script. Panels are rectangles; space children
+  manually with Position math. For scrolling lists use ScrollingFrame with
+  CanvasSize = UDim2.new(0, 0, 0, <contentHeight>) and ScrollBarThickness = 6.
 - Wire interactions with real events: button.MouseButton1Click:Connect(...),
   frame.Visible = true/false for open/close, TweenService for slide/fade
   transitions. Give a close/back button — never build a dialog with no way
@@ -471,13 +477,9 @@ size and colors, keep the structure and property names exact):
   screenGui.Parent = script.Parent.Parent
   local panel = Instance.new("Frame")
   panel.Size = UDim2.new(0, 320, 0, 220)
-  panel.Position = UDim2.new(0.5, 0, 0.5, 0)
-  panel.AnchorPoint = Vector2.new(0.5, 0.5)
+  panel.Position = UDim2.new(0.5, -160, 0.5, -110)
   panel.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
   panel.Parent = screenGui
-  local corner = Instance.new("UICorner")
-  corner.CornerRadius = UDim.new(0, 10)
-  corner.Parent = panel
   local title = Instance.new("TextLabel")
   title.Size = UDim2.new(1, 0, 0, 40)
   title.Position = UDim2.new(0, 0, 0, 0)
@@ -485,7 +487,7 @@ size and colors, keep the structure and property names exact):
   title.Text = "Panel Title"
   title.TextColor3 = Color3.fromRGB(255, 255, 255)
   title.TextScaled = true
-  title.Font = Enum.Font.SourceSansBold
+  title.Font = Enum.Font.ArialBold
   title.Parent = panel
   local closeBtn = Instance.new("TextButton")
   closeBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -493,18 +495,15 @@ size and colors, keep the structure and property names exact):
   closeBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
   closeBtn.Text = "X"
   closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-  closeBtn.Font = Enum.Font.SourceSansBold
+  closeBtn.Font = Enum.Font.ArialBold
   closeBtn.Parent = panel
-  local closeCorner = Instance.new("UICorner")
-  closeCorner.CornerRadius = UDim.new(0, 6)
-  closeCorner.Parent = closeBtn
   closeBtn.MouseButton1Click:Connect(function()
   screenGui.Enabled = false
   end)
   Note: Color3.fromRGB IS correct here — this is UI, not a Part. Every GuiObject
   you add follows this exact same pattern: create it, set Size/Position/BackgroundColor3
-  (or Text*/Font for labels/buttons), set Parent LAST, add a UICorner if it should
-  be rounded, wire MouseButton1Click for any button, one statement per line.
+  (or Text*/Font for labels/buttons), set Parent LAST, wire MouseButton1Click for
+  any button, one statement per line. NO UICorner/UIListLayout anywhere.
 
 ROBLOX ASSETS:
 - You cannot import raw 3D geometry. You CAN reference real catalog assets by ID.
@@ -632,8 +631,9 @@ SIZE LIMIT — IMPORTS BREAK WHEN TOO BIG (hard rule):
 - Estimate: every Luau line you write is roughly 1 block and every ~40 blocks is
   ~10,000 encoded chars. HARD CAP: keep EVERY script you output under ~50 blocks
   (~180 max: 40 for structure + 30 for logic). If the build needs more:
-  * UI: cut decorative properties first — skip UICorner, BackgroundTransparency,
-    Font, TextScaled unless essential. Keep Size/Position/Text/colors only.
+  * UI: cut decorative properties first — skip BackgroundTransparency, Font,
+    TextScaled unless essential. Keep Size/Position/Text/colors only. (There is
+    no UICorner to cut — it must never appear at all.)
   * Models: fewer, bigger parts rather than many tiny ones; drop redundant detail.
   * Still over? Output the essentials only and tell the user what you left out.
 

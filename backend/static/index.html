@@ -4268,6 +4268,8 @@ function buildFromLua(lua){
   }
   function tokV(t){t=String(t||"").trim();if(/^["'].*["']$/.test(t))return tv("1",t.slice(1,-1),"String");var ft=foldN(t);if(ft!==null)return tv("1",hexF(ft),"Number");if(t==="true")return tv("1","1","Bool");if(t==="false")return tv("1","0","Bool");return tv("2",t.replace(/\s+/g,""),"");}
   var PL_SKIP={Enum:1,BrickColor:1,Color3:1,Vector3:1,CFrame:1,UDim2:1,math:1,string:1,os:1,task:1,Instance:1,script:1,typeof:1};
+  var RSX_MODERN={UICorner:1,UIListLayout:1,UIPadding:1,UIStroke:1,UIGradient:1,UIAspectRatioConstraint:1,UIPageLayout:1,UITableLayout:1,UIScale:1,MeshPart:1,UIFlexPane:1};
+  function modernWarn(cls){if(RSX_MODERN[cls])warns.push("RetroStudio does not have "+cls+" (2010-era only) — remove it or the build breaks");}
   function resolvePath(p,out){var segs=String(p).split(".");var cur=segs[0];for(var si=1;si<segs.length;si++){var tn="_rp"+(blocks.length+1);var bg=add("GetObjectProperty","Get Prop",ESC+"Object"+ESC+"0"+ESC+esc(cur)+ESC+"Property"+ESC+"0"+ESC+esc(segs[si]),ESC+"Value"+ESC+esc(tn));if(bg)out.push(bg);cur=tn;}return cur;}
   function concatChain(expr,out,finalVar){var parts=String(expr).split("..");if(parts.length<2)return null;var cur=null;for(var pi=0;pi<parts.length;pi++){var tr=parts[pi].trim();var pv=(/^[A-Za-z_]\w*\.[A-Za-z_]\w*/.test(tr)&&tr.charCodeAt(0)!==39&&tr.charCodeAt(0)!==34)?tv("2",resolvePath(tr,out),""):tokV(parts[pi]);if(cur===null){cur=pv;continue;}var rn=(pi===parts.length-1)?finalVar:"_cc"+(blocks.length+1)+"_"+pi;var bc=add("Concatenate","Concat",ESC+"FirstString"+cur+ESC+"SecondString"+pv,ESC+"Result"+ESC+esc(rn));if(bc)out.push(bc);cur=tv("2",rn,"");}return cur;}
   function propLoads(s){try{
@@ -4293,7 +4295,7 @@ function buildFromLua(lua){
     m=L.match(/^(?:local\s+)?([A-Za-z_]\w*)\s*=\s*(-?[\d._]+)$/);
     if(m){KNOWNNUM[m[1]]=m[2].replace(/_/g,"");b=add("SetVariable1","Set Variable",ESC+"Value"+tv("1",hexF(m[2]),"Number"),ESC+"VariableName"+ESC+esc(m[1]));return b?[b]:null;}
     /* 2) Instance.new("Class", parent) */
-    m=L.match(/^(?:local\s+([A-Za-z_]\w*)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\s*,\s*([\w.]+)\s*\)$/);
+    m=L.match(/^(?:local\s+([A-Za-z_]\w*)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\s*,\s*([\w.]+)\s*\)$/);if(m)modernWarn(m[2]);
     if(m){b=add("CreateObject","Create Object",ESC+"Parent"+ESC+"0"+ESC+esc(m[3])+ESC+"ClassName"+ESC+"0"+ESC+esc(m[2]),ESC+"Object"+ESC+esc(m[1]||m[2]));return b?[b]:null;}
     /* 3) obj.CFrame = CFrame.new(x,y,z) */
     m=L.match(/^([\w.]+)\.CFrame\s*=\s*CFrame\.new\s*\(([^,]+),([^,]+),([^)]+)\)$/);
@@ -4407,7 +4409,7 @@ function buildFromLua(lua){
       m=L.match(/^local\s+(\w+)\s*=\s*math\.(\w+)\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("MathLibrarySingleInput","Math Single",ESC+"Function"+ESC+"0"+ESC+esc(m[2])+ESC+"Input"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*math\.(\w+)\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)$/);if(m){var b=add("MathLibraryDoubleInput","Math Double",ESC+"Function"+ESC+"0"+ESC+esc(m[2])+ESC+"Input 1"+tv("2",m[3],"")+ESC+"Input 2"+tv("2",m[4],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*Vector3\.new\s*\((-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\)$/);if(m){var b=add("ConstructVector3","Vector3",ESC+"X"+tv("1",hexN(m[2]),"Number")+ESC+"Y"+tv("1",hexN(m[3]),"Number")+ESC+"Z"+tv("1",hexN(m[4]),"Number"),ESC+"Vector3"+ESC+esc(m[1]));if(b)out.push(b);continue;}
-      m=L.match(/^(?:local\s+(\w+)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\)$/);if(m){var b=add("CreateObject","Create Object",ESC+"Parent"+ESC+"0"+ESC+"script.Parent"+ESC+"ClassName"+ESC+"0"+ESC+esc(m[2]),ESC+"Object"+ESC+esc(m[1]||m[2]));if(b)out.push(b);continue;}
+      m=L.match(/^(?:local\s+(\w+)\s*=\s*)?Instance\.new\s*\(\s*["'](\w+)["']\)$/);if(m){modernWarn(m[2]);var b=add("CreateObject","Create Object",ESC+"Parent"+ESC+"0"+ESC+"script.Parent"+ESC+"ClassName"+ESC+"0"+ESC+esc(m[2]),ESC+"Object"+ESC+esc(m[1]||m[2]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*tonumber\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("MathLibrarySingleInput","To Number",ESC+"Function"+ESC+"0"+ESC+"tonumber"+ESC+"Input"+tv("2",m[2],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(?:typeof|type)\s*\(\s*(\w+)\s*\)$/);if(m){var b=add("TypeOf","Type Of",ESC+"Variable"+tv("2",m[2],""),ESC+"Type"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*([\w.]+):WaitForChild\s*\(\s*["']([^"']+)["'](?:\s*,\s*[\d.]+)?\)$/);if(m){var b=add("FindFirstChild","Find First Child",ESC+"Parent"+ESC+"0"+ESC+esc(m[2])+ESC+"ChildName"+ESC+"0"+ESC+esc(m[3])+ESC+"Recursive"+ESC+"0"+ESC+"0",ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
