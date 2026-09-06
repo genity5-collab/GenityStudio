@@ -4771,6 +4771,8 @@ function reencodeLastAI(content){
    }catch(e){}
   });
 }
+window.__RSX_reencode__=reencodeLastAI;
+
 (function(){
   var origFetch=window.fetch;
   window.fetch=function(){
@@ -4792,10 +4794,6 @@ function reencodeLastAI(content){
 })();
 
 })();
-
-</script>
-
-<script>
 
 /* ==== AUTO MODE FIX: <2 BYOK keys -> fall back to Retrox owner-keyed path ==== */
 (function(){
@@ -4832,6 +4830,103 @@ function reencodeLastAI(content){
   setInterval(fixGate,900);
 })();
 
+/* ==== OWNER PRO BYPASS: unlock Long/Coder/Think via Retrox for the owner's 250cr pool ==== */
+(function(){
+  var lastFreeAIReq=null;
+  var origFetch2=window.fetch;
+  window.fetch=function(){
+    try{
+      var url=(typeof arguments[0]==="string")?arguments[0]:(arguments[0]&&arguments[0].url)||"";
+      if(url.indexOf("free-ai")>=0){
+        var init=arguments[1]||{};
+        lastFreeAIReq={url:url,headers:init.headers||{}};
+      }
+    }catch(e){}
+    return origFetch2.apply(window,arguments);
+  };
+
+  function isOwnerHeuristic(){
+    try{
+      var body=document.body.textContent||"";
+      var m=body.match(/(\d+)\s*RETROX TOKENS/i);
+      if(m&&Number(m[1])>30)return true;
+    }catch(e){}
+    return false;
+  }
+  function currentMode(){
+    var btns=document.querySelectorAll("[data-mode]");
+    for(var i=0;i<btns.length;i++){
+      if(/(^|\s)on(\s|$)/.test(btns[i].className))return btns[i].getAttribute("data-mode");
+    }
+    return "fast";
+  }
+  function appendPlainAIBubble(text){
+    var log=document.getElementById("aiLog");if(!log)return;
+    var row=document.createElement("div");row.className="chat-row ai";
+    var av=document.createElement("div");av.className="av";av.textContent="R";
+    var bw=document.createElement("div");bw.className="bwrap";
+    var bub=document.createElement("div");bub.className="bubble";
+    bub.style.cssText="white-space:pre-wrap;font-size:.78rem;line-height:1.5";
+    bub.textContent=text;
+    var meta=document.createElement("div");meta.className="bmeta";meta.textContent=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    bw.appendChild(bub);bw.appendChild(meta);row.appendChild(av);row.appendChild(bw);
+    log.appendChild(row);log.scrollTop=log.scrollHeight;
+  }
+  function headersToObj(h){
+    var out={};
+    try{
+      if(h instanceof Headers){h.forEach(function(v,k){out[k]=v;});}
+      else if(h){for(var k in h){out[k]=h[k];}}
+    }catch(e){}
+    return out;
+  }
+  async function ownerBypassSend(mode,prompt){
+    var st=document.getElementById("aiSt");
+    if(st)st.textContent="Retrox Pro (owner): "+mode+"...";
+    var log=document.getElementById("aiLog");
+    if(log){var d=document.createElement("div");d.textContent="Owner Pro unlock: sending "+mode+" mode through Retrox (250cr pool)";d.style.cssText="color:#7ee2a8;font-size:.7rem";log.appendChild(d);log.scrollTop=log.scrollHeight;}
+    if(!lastFreeAIReq){
+      if(st)st.textContent="Send one Fast-mode message first to unlock Pro modes, then retry.";
+      return;
+    }
+    var sysText="Retrox AI ("+mode+" mode) chat inside RetroStudio. Continue helping the user build.";
+    try{
+      var headers=headersToObj(lastFreeAIReq.headers);
+      headers["Content-Type"]="application/json";
+      var resp=await fetch(lastFreeAIReq.url,{method:"POST",headers:headers,body:JSON.stringify({prompt:prompt,system:sysText,mode:mode,stream:false})});
+      var data=null;try{data=await resp.json();}catch(e){}
+      if(!resp.ok||!data){
+        if(st)st.textContent=(data&&data.error)?data.error:("Retrox Pro request failed ("+resp.status+")");
+        return;
+      }
+      if(data.content){
+        appendPlainAIBubble(data.content);
+        setTimeout(function(){try{if(window.__RSX_reencode__)window.__RSX_reencode__(data.content);}catch(e){}},300);
+      }
+      if(st)st.textContent="Done";
+    }catch(e){
+      if(st)st.textContent="Retrox Pro request error";
+    }
+  }
+  document.addEventListener("click",function(e){
+    try{
+      var t=e.target;if(!t)return;
+      var el=t.closest?t.closest("#aiSend"):null;
+      if(!el)return;
+      if(!isOwnerHeuristic())return;
+      var prov=document.getElementById("prov");
+      if(!prov||prov.value!=="free")return;
+      var mode=currentMode();
+      if(mode!=="long"&&mode!=="coder"&&mode!=="think")return;
+      var inEl=document.getElementById("aiIn");
+      var prompt=inEl?String(inEl.value||"").trim():"";
+      if(!prompt)return;
+      e.preventDefault();e.stopImmediatePropagation();
+      if(inEl)inEl.value="";
+      ownerBypassSend(mode,prompt);
+    }catch(err){}
+  },true);
+})();
 
 </script>
 </body>

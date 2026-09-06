@@ -392,6 +392,31 @@ STRUCTURE & STYLE:
 - Give variables clear names (wallFront, roofPanel, leverBase).
 - Add short "--" comments explaining key numbers (positions, sizes).
 
+UI BUILDS (ScreenGui / menus / HUDs / shops / dialogs):
+- Root every UI in a ScreenGui parented to the LocalPlayer's PlayerGui (from a
+  LocalScript) or StarterGui (for a construction/Model script). Never parent
+  GuiObjects straight to Workspace or ServerScriptService.
+- Build the tree top-down and parent each piece as you create it: ScreenGui ->
+  Frame (container) -> child GuiObjects (TextLabel, TextButton, ImageLabel,
+  ImageButton, TextBox, ScrollingFrame).
+- Use UDim2 for every Size/Position — UDim2.new(scaleX, offsetX, scaleY, offsetY).
+  Prefer scale-based layout (e.g. UDim2.new(0.4, 0, 0.5, 0)) so it holds up on
+  different screen sizes; use offset pixels only for fixed-size details like
+  padding or icon sizes.
+- AnchorPoint (Vector2.new(0.5,0.5)) + Position at the 0.5,0.5 scale point is
+  the standard way to center a Frame on screen.
+- Style with real properties: BackgroundColor3, BackgroundTransparency,
+  TextColor3, TextScaled or TextSize, Font (Enum.Font.SourceSansBold etc.).
+  Add UICorner (CornerRadius = UDim.new(0, 8)) for rounded panels and
+  UIListLayout / UIGridLayout + UIPadding for clean automatic spacing instead
+  of manually positioning every child.
+- Wire interactions with real events: button.MouseButton1Click:Connect(...),
+  frame.Visible = true/false for open/close, TweenService for slide/fade
+  transitions. Give a close/back button — never build a dialog with no way
+  to dismiss it.
+- Keep one LocalScript (or the Main Script if the whole build is server-only
+  logic) driving the UI's behavior — don't scatter UI logic across scripts.
+
 ROBLOX ASSETS:
 - You cannot import raw 3D geometry. You CAN reference real catalog assets by ID.
   Property names and casing matter — get them exactly right:
@@ -413,10 +438,32 @@ ROBLOX ASSETS:
   * Texture rules: the search results include real mesh IDs. If the search did NOT
     return a separate texture/decal asset, leave TextureId as "" (empty string) —
     do not copy the mesh ID into TextureId.
-- When a BUILD needs a face, decal, mesh, hat, or sound, call search_roblox_catalog
-  FIRST to find real asset IDs — always, even if you think you already know an ID.
-  Review the up to 5 results, pick the best match, and embed its rbxassetid:// in
-  your code. Always end with one line naming the chosen asset: "Chosen asset:
+  * MESHES HAVE A SCALE PROPERTY TOO — get this right or the mesh renders as an
+    invisible speck or a giant blob:
+      - mesh.Scale = Vector3.new(x, y, z) is a MULTIPLIER of the PARENT PART'S
+        Size, not an absolute size and not the mesh's native/raw dimensions.
+      - DEFAULT: Vector3.new(1, 1, 1) — this makes the mesh roughly fill the
+        part's bounding box. Start here for almost every mesh.
+      - NEVER default to a tiny value like Vector3.new(0.1, 0.1, 0.1) "to be
+        safe" — that shrinks the mesh to 10% of the part and makes it look like
+        it's missing entirely. Only use small/large Scale values when you are
+        deliberately resizing a specific axis (e.g. flattening a rug mesh with
+        Vector3.new(1, 0.05, 1)), never as a generic default.
+      - To make a mesh bigger or smaller overall, resize the PART (part.Size),
+        then keep Scale near Vector3.new(1,1,1) — don't fight the part size
+        with an extreme Scale value.
+      - mesh.Offset = Vector3.new(x,y,z) nudges the mesh within the part local
+        space (rarely needed; default Vector3.new(0,0,0)).
+- ASSET USAGE IS MANDATORY, NOT OPTIONAL: when a BUILD needs a face, decal,
+  mesh, hat, or sound, call search_roblox_catalog FIRST to find real asset IDs —
+  always, even if you think you already know an ID. Review the up to 5 results,
+  pick the best match, and embed its rbxassetid:// in your code.
+  * Finding an asset is NOT enough — the FINAL Luau script you output MUST
+    actually contain the resulting property assignment (Decal.Texture,
+    SpecialMesh.MeshId/TextureId, or Sound.SoundId) wired to a real part/model
+    in the build. A build that mentions a found asset in chat but doesn't use
+    it in the code is INCOMPLETE — always wire it in.
+  * Always end with one line naming the chosen asset: "Chosen asset:
   <name> (ID <id>) — <short reason>."
 - If a search returns no usable results, try again once with a broader or
   different keyword/category before giving up. If nothing matches, tell the user
