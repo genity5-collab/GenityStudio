@@ -46,7 +46,7 @@ const BUILD_INTENT_RE = /\b(build|add|make|create|put|give|place|script|insert|u
 // catalog.roblox.com is tried for wearables with graceful fallback.
 
 const TOOLBOX_TYPES: Record<string, number> = {
-  decals: 13, faces: 13, meshes: 4, images: 1, models: 10, audio: 3,
+  decals: 13, faces: 13, meshes: 40, images: 13, models: 10, audio: 3,
 };
 
 const CATALOG_SUBCATEGORIES: Record<string, number> = {
@@ -191,7 +191,7 @@ async function searchToolbox(keyword: string, assetType: number): Promise<{ resu
     if (ids.length === 0) return { results: [], source: "Roblox Creator Store" };
 
     // Enrich with details (name, creator, description)
-    let details = new Map<number, { name?: string; creator?: string; description?: string }>();
+    let details = new Map<number, { name?: string; creator?: string; description?: string; meshId?: number }>();
     try {
       const dparams = new URLSearchParams({ assetIds: ids.join(",") });
       const dresp = await fetch(`${TOOLBOX_DETAILS_URL}?${dparams.toString()}`, { headers: httpHeaders(robloxApiKey), signal: AbortSignal.timeout(7000) });
@@ -201,22 +201,35 @@ async function searchToolbox(keyword: string, assetType: number): Promise<{ resu
         for (const item of ddata) {
           const id = item?.asset?.id;
           if (typeof id === "number") {
-            details.set(id, { name: item.asset?.name, creator: item?.creator?.name, description: item.asset?.description });
+            details.set(id, {
+              name: item.asset?.name,
+              creator: item?.creator?.name,
+              description: item.asset?.description,
+              // For mesh assets the catalog asset id is a wrapper; the REAL mesh
+              // content id lives in asset.meshId and is what MeshPart.MeshId /
+              // SpecialMesh.MeshId should reference when present.
+              meshId: typeof item.asset?.meshId === "number" ? item.asset.meshId : undefined,
+            });
           }
         }
       }
     } catch { /* best-effort */ }
 
     const thumbs = await fetchThumbnails(ids);
-    const results: CatalogAsset[] = ids.map((id) => ({
-      id,
-      name: details.get(id)?.name || "Roblox asset",
-      assetType: assetType,
-      itemType: "Asset",
-      creatorName: details.get(id)?.creator || "Unknown",
-      thumbnailUrl: thumbs.get(id) ?? null,
-      rbxAssetId: `rbxassetid://${id}`,
-    }));
+    const results: CatalogAsset[] = ids.map((id) => {
+      const detail = details.get(id);
+      return {
+        id,
+        name: detail?.name || "Roblox asset",
+        assetType: assetType,
+        itemType: "Asset",
+        creatorName: detail?.creator || "Unknown",
+        thumbnailUrl: thumbs.get(id) ?? null,
+        // Mesh assets: reference the real mesh content id when the details
+        // response provides one; everything else uses the catalog asset id.
+        rbxAssetId: detail?.meshId ? `rbxassetid://${detail.meshId}` : `rbxassetid://${id}`,
+      };
+    });
     return { results, source: "Roblox Creator Store (live)" };
   } catch {
     return { results: [], source: "Roblox Creator Store" };
@@ -395,9 +408,11 @@ ROBLOX ASSETS:
         mesh.MeshId = "rbxassetid://<mesh id>"
         mesh.TextureId = "rbxassetid://<texture id>"  -- omit ("") if there is no texture asset
         mesh.Parent = part
-    * MeshPart (newer, preferred for real meshes): MeshPart.MeshId and
-      MeshPart.TextureID — note TextureID has a capital "ID" on MeshPart, unlike
-      SpecialMesh.TextureId. Do not mix up the casing between the two classes.
+  * RETROSTUDIO IS A ~2010 ROBLOX RECREATION: MeshPart does not exist there.
+    ALWAYS use SpecialMesh (parented to a Part) for custom meshes — never MeshPart.
+  * Texture rules: the search results include real mesh IDs. If the search did NOT
+    return a separate texture/decal asset, leave TextureId as "" (empty string) —
+    do not copy the mesh ID into TextureId.
 - When a BUILD needs a face, decal, mesh, hat, or sound, call search_roblox_catalog
   FIRST to find real asset IDs — always, even if you think you already know an ID.
   Review the up to 5 results, pick the best match, and embed its rbxassetid:// in
@@ -438,6 +453,46 @@ ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode
 - If a build is unavoidably complex, still follow every rule above — simplicity is
   what makes the encoder succeed, not shorter code.
 
+MODEL-FIRST BUILD ORDER (required for every build that creates a physical model):
+- If the build creates ANY physical model/structure (house, shop, stand, pedestal,
+  bridge, vehicle, statue, mesh display, or any multi-part construction), you MUST
+  output TWO scripts in this exact order:
+  SCRIPT 1 — THE MODEL SCRIPT (build the world model):
+    * Contains ONLY construction code — every Part, SpecialMesh, Decal, Model,
+      weld, anchor, position, color, texture. NOTHING else: no player logic, no
+      events, no leaderstats, no tools, no chat commands.
+    * End it with exactly: print("Model built - you can delete this script now")
+    * After the code, tell the user: "Run this script in RetroStudio Studio first
+      (paste in the command bar or run once) so the model appears in the world.
+      Delete the script afterwards."
+  SCRIPT 2 — THE MAIN SCRIPT (the logic):
+    * Contains the interactive logic (events, tools, leaderstats, animations,
+      sounds, etc.).
+    * Preface it with where to place it, e.g.:
+      "Place this in ServerScriptService (regular Script):"
+  If the build has logic, both scripts are required — the model script first,
+  always. If the build is pure model with no logic, output only the model script
+  with the run-in-studio instruction.
+- Use this exact header format for each script block, followed by a 1-2 sentence
+  summary of THAT script, then its code:
+  "Script 1 — Model (run once in Studio)"
+  "Script 2 — Main (place in <location>, <Script|LocalScript>)"
+
+COMPLETENESS (critical — builds must be finished, never stubbed):
+- NEVER output a placeholder, demo, or minimal script when the user asks for a real
+  build. A request like "build a house" means a REAL house: floor, all four walls,
+  door opening with a working door, windows, a full roof — every part fully created
+  with real sizes, positions, colors and materials. No "print hello" demos, no
+  "rest of the parts here" comments, no truncation hints, no asking the user to
+  finish it themselves.
+- Write out every part with its own Instance.new + properties. A structure build
+  should contain at minimum 8-15 parts. If the response is getting long, KEEP
+  WRITING — a complete build beats a short one.
+- The one print() line allowed in a model script is the "Model built" confirmation
+  above; logic scripts may use print for real status messages only.
+- Never use player:Kick() in normal builds. Never add joke/test behaviors the user
+  did not ask for.
+
 RESPONSE FORMAT:
 - Plain text only — no markdown, no **, no triple backticks, no headers with #.
 - For chat/asset-search answers: plain text only, no code block at all.
@@ -459,10 +514,13 @@ CODER MODE — MULTIPLE SCRIPTS WHEN THE BUILD NEEDS THEM:
 - Only split when there is a real reason (different Script type, different
   instance/location, or a clean separation of concerns). A small single-purpose
   request is still just ONE script — do not split for the sake of splitting.
-- Format each script as its own block, in order:
-  "Script 1 — <where it goes, e.g. ServerScriptService> (<Script|LocalScript|ModuleScript>): <one-line purpose>"
+- The MODEL-FIRST BUILD ORDER above always applies first: Script 1 is the model
+  script, Script 2 is the main logic script. Only ADD further scripts beyond
+  those when there is a real reason (a separate client LocalScript, a
+  ModuleScript, a second independent system).
+- Format each additional script as its own block, in order:
+  "Script N — <where it goes, e.g. ServerScriptService> (<Script|LocalScript|ModuleScript>): <one-line purpose>"
   followed by a 1-2 sentence context summary for THAT script, then its Luau code.
-  Repeat "Script 2 — ...", "Script 3 — ..." for each additional script.
 - Every individual script must still follow all ENCODER-FRIENDLY LUAU rules above.`;
 
 Deno.serve(async (request) => {
@@ -582,7 +640,7 @@ Deno.serve(async (request) => {
 
   await new Promise((resolve) => setTimeout(resolve, 900));
   const TOKEN_BUDGET_BY_MODE: Record<string, number> = {
-    fast: 2560, auto: 3584, plan: 4096, think: 4096, long: 6144, coder: 7168,
+    fast: 3584, auto: 4608, plan: 5120, think: 5120, long: 7168, coder: 8192,
   };
   const maxCompletionTokens = TOKEN_BUDGET_BY_MODE[mode] ?? 4096;
   const reasoningEffort = mode === "fast" || mode === "auto" ? "low" : "medium";
@@ -906,6 +964,12 @@ Deno.serve(async (request) => {
   // Plain-text hygiene: strip markdown fences if the model added them anyway.
   let content = finalContent;
   content = content.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
+  // Also strip markdown bold/italic/headers/hr the small models sometimes emit
+  // despite the plain-text rule — they would render literally in the chat UI.
+  content = content.replace(/^#{1,6}\s+/gm, "");
+  content = content.replace(/\*\*(.+?)\*\*/g, "$1");
+  content = content.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, "$1$2");
+  content = content.replace(/^\s*-{3,}\s*$/gm, "");
   if (content.trim().length === 0) {
     const errPayload = { error: "Free AI returned no usable response", status: 502 };
     if (streamController) {
