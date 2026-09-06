@@ -594,6 +594,18 @@ ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode
     * property comparisons in if/while: if gold.Value >= price then
     * warn("msg") alongside print("msg")
     * markdown code fences (triple backticks) around your scripts are fine — stripped automatically
+    * string library: string.find(s, "pat"), string.split(s, ","), string.len(s),
+      string.sub(s, 1, 5), string.gsub(s, "a", "b"), string.upper/lower/format
+    * tostring(x), tonumber("42") or tonumber(var), typeof(x)
+    * tables: table.insert(t, v), table.insert(t, pos, v), table.remove(t, i),
+      local k = table.find(t, v), table.sort(t), #t, t[k] = v
+    * math.random(a, b) (use two args), math.round/floor/ceil/abs/sqrt(x)
+    * Vector3 math: v.Unit, v.Magnitude, (a - b).Magnitude, a:Dot(b), a:Cross(b)
+    * CFrame math: cf.LookVector, cf.RightVector, a:Lerp(b, 0.5), cf:Inverse(),
+      a:ToObjectSpace(b), a:ToWorldSpace(b)
+    * time: tick(), os.time(), os.clock(), os.date(0)
+    * instance utilities: part:Clone(), part:GetChildren(), part:IsDescendantOf(x),
+      local x = require(module), humanoid:MoveTo(pos), humanoid:ChangeState(n)
   ONE CAVEAT: in a WHILE loop condition, an obj.Prop check is captured ONCE before
   the loop starts. If the property must be re-checked every pass, update a plain
   local inside the loop body and compare that local in the condition instead.
