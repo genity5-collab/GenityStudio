@@ -18,10 +18,28 @@ function corsHeadersFor(request: Request): Record<string, string> {
 }
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"]; // primary + auto-fallback
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const FREE_MODES = new Set(["auto", "fast", "plan", "think", "long", "coder"]);
-const CHARGE_BASE = 3;        // credits per Retrox use (server decides; client never sends cost)
+// Mode-based pricing, charged through the existing consume_free_ai_tokens RPC
+// (which clamps each charge to 1..6). The client never sends a cost.
+const CHARGE_BY_MODE: Record<string, number> = {
+  fast: 1,   // lowest compute, quick answers
+  auto: 2,   // default everyday mode ("Normal")
+  plan: 2,
+  think: 3,  // more reasoning
+  long: 4,  // extended reasoning for difficult tasks
+  coder: 5,  // complex programming / agentic coding
+};
 const CHARGE_SEARCH_EXTRA = 2; // extra credits when live Roblox catalog search runs
+const MODE_PRICES_PUBLIC: Record<string, number> = {
+  fast: 1, auto: 2, think: 3, long: 4, coder: 5,
+};
+
+// Heuristic: when the prompt clearly wants an asset AND clearly wants a build,
+// force the search tool on the first round instead of leaving it to model whim
+// (small models sometimes skip the tool call even when told to use it).
+const ASSET_KEYWORD_RE = /\b(decal|decals|mesh|meshes|face|faces|hat|hats|hair|gear|sound|audio|texture|textures|skin|skins|model|models|accessory|accessories|image|images|shirt|shirts|pants|tshirt|t-shirt|bundle|bundles|animation|animations)\b/i;
+const BUILD_INTENT_RE = /\b(build|add|make|create|put|give|place|script|insert|use|attach|apply|equip|spawn|generate)\b/i;
 
 // ─── Roblox catalog search (live, public Marketplace API) ──────────────────
 // Toolbox marketplace API is used first (not IP-blocked, returns rich data);
@@ -37,6 +55,17 @@ const CATALOG_SUBCATEGORIES: Record<string, number> = {
   shirts: 12, pants: 14, tshirts: 13,
 };
 
+const KIND_BY_CATEGORY: Record<string, string> = {
+  decals: "decal", faces: "face", meshes: "mesh", images: "image",
+  models: "model", audio: "sound", hats: "hat", hair: "hair", gear: "gear",
+  heads: "head", accessories: "accessory", bundles: "bundle",
+  animations: "animation", shirts: "shirt", pants: "pants", tshirts: "t-shirt",
+};
+
+function kindFor(categoryKey: string): string {
+  return KIND_BY_CATEGORY[(categoryKey || "").toLowerCase()] || "asset";
+}
+
 type CatalogAsset = {
   id: number;
   name: string;
@@ -45,6 +74,14 @@ type CatalogAsset = {
   creatorName?: string;
   thumbnailUrl: string | null;
   rbxAssetId: string;
+};
+
+type SearchRecord = {
+  keyword: string;
+  category: string;
+  kind: string;
+  source: string;
+  results: CatalogAsset[];
 };
 
 const CATALOG_TOOL = {
@@ -70,6 +107,41 @@ const CATALOG_TOOL = {
         },
       },
       required: ["keyword"],
+    },
+  },
+};
+
+const REFERENCE_TOOL = {
+  type: "function",
+  function: {
+    name: "reference_asset_image",
+    description:
+      "Pulls a real Roblox asset image (decal, face, image, mesh, model) and shows it to the user as a " +
+      "visual reference card in the chat. Use it when a picture genuinely helps — e.g. the user wants to see " +
+      "what a decal/texture looks like before you embed it. Do NOT call it for every build; skip it when the " +
+      "build does not need a visual. It does not embed anything by itself.",
+    parameters: {
+      type: "object",
+      properties: {
+        asset_id: {
+          type: "number",
+          description: "Known Roblox asset ID (from a previous search).",
+        },
+        keyword: {
+          type: "string",
+          description: "Search keyword when no ID is known yet, e.g. 'brick texture'.",
+        },
+        category: {
+          type: "string",
+          enum: Array.from(new Set([...Object.keys(TOOLBOX_TYPES), ...Object.keys(CATALOG_SUBCATEGORIES)])),
+          description: "Asset category. Defaults to decals when searching by keyword.",
+        },
+        note: {
+          type: "string",
+          description: "One short line explaining why this image is shown as reference (max 80 chars).",
+        },
+      },
+      required: [],
     },
   },
 };
@@ -107,19 +179,19 @@ async function fetchThumbnails(ids: number[]): Promise<Map<number, string>> {
 }
 
 // ── Toolbox flow: search → details (name/creator) → thumbnails ──────────
-async function searchToolbox(keyword: string, assetType: number): Promise<{ results: CatalogAsset[] }> {
+async function searchToolbox(keyword: string, assetType: number): Promise<{ results: CatalogAsset[]; source: string }> {
   const robloxApiKey = Deno.env.get("ROBLOX_API_KEY");
   const params = new URLSearchParams({ limit: "20", keyword: keyword.slice(0, 100) });
   try {
     const resp = await fetch(`${TOOLBOX_SEARCH_URL}/${assetType}?${params.toString()}`, { headers: httpHeaders(robloxApiKey), signal: AbortSignal.timeout(7000) });
-    if (!resp.ok) return { results: [] };
+    if (!resp.ok) return { results: [], source: "Roblox Creator Store" };
     const body = await resp.json();
     const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
     const ids = items.map((i: Record<string, unknown>) => i.id).filter((id: unknown) => typeof id === "number") as number[];
-    if (ids.length === 0) return { results: [] };
+    if (ids.length === 0) return { results: [], source: "Roblox Creator Store" };
 
     // Enrich with details (name, creator, description)
-    let details = new Map<number, { name?: string; creator?: string }>();
+    let details = new Map<number, { name?: string; creator?: string; description?: string }>();
     try {
       const dparams = new URLSearchParams({ assetIds: ids.join(",") });
       const dresp = await fetch(`${TOOLBOX_DETAILS_URL}?${dparams.toString()}`, { headers: httpHeaders(robloxApiKey), signal: AbortSignal.timeout(7000) });
@@ -129,7 +201,7 @@ async function searchToolbox(keyword: string, assetType: number): Promise<{ resu
         for (const item of ddata) {
           const id = item?.asset?.id;
           if (typeof id === "number") {
-            details.set(id, { name: item.asset?.name, creator: item?.creator?.name });
+            details.set(id, { name: item.asset?.name, creator: item?.creator?.name, description: item.asset?.description });
           }
         }
       }
@@ -145,14 +217,14 @@ async function searchToolbox(keyword: string, assetType: number): Promise<{ resu
       thumbnailUrl: thumbs.get(id) ?? null,
       rbxAssetId: `rbxassetid://${id}`,
     }));
-    return { results };
+    return { results, source: "Roblox Creator Store (live)" };
   } catch {
-    return { results: [] };
+    return { results: [], source: "Roblox Creator Store" };
   }
 }
 
 // ── Catalog flow (wearables) — may be rate-limited; callers fall back ────
-async function searchCatalog(keyword: string, subcategoryKey: string): Promise<{ results: CatalogAsset[] }> {
+async function searchCatalog(keyword: string, subcategoryKey: string): Promise<{ results: CatalogAsset[]; source: string }> {
   const subcategory = CATALOG_SUBCATEGORIES[subcategoryKey] ?? CATALOG_SUBCATEGORIES.all;
   const params = new URLSearchParams({
     Category: "1",
@@ -163,7 +235,7 @@ async function searchCatalog(keyword: string, subcategoryKey: string): Promise<{
   });
   try {
     const resp = await fetch(`${CATALOG_URL}?${params.toString()}`, { headers: httpHeaders(), signal: AbortSignal.timeout(6000) });
-    if (!resp.ok) return { results: [] };
+    if (!resp.ok) return { results: [], source: "Roblox Marketplace (live)" };
     const body = await resp.json();
     const items = Array.isArray(body?.data) ? body.data.slice(0, 5) : [];
     const ids = items.map((i: Record<string, unknown>) => i.id).filter((id: unknown) => typeof id === "number") as number[];
@@ -177,13 +249,13 @@ async function searchCatalog(keyword: string, subcategoryKey: string): Promise<{
       thumbnailUrl: thumbs.get(item.id as number) ?? null,
       rbxAssetId: `rbxassetid://${item.id}`,
     }));
-    return { results };
+    return { results, source: "Roblox Marketplace (live)" };
   } catch {
-    return { results: [] };
+    return { results: [], source: "Roblox Marketplace" };
   }
 }
 
-async function searchRobloxCatalog(keyword: string, categoryKey: string): Promise<{ results: CatalogAsset[] }> {
+async function searchRobloxCatalog(keyword: string, categoryKey: string): Promise<{ results: CatalogAsset[]; source: string }> {
   const catLower = (categoryKey || "").toLowerCase();
 
   // Faces, decals, meshes, images, models, audio → toolbox flow (reliable)
@@ -192,11 +264,71 @@ async function searchRobloxCatalog(keyword: string, categoryKey: string): Promis
   }
 
   // Wearables (hats, hair, gear, …) → try catalog, fall back to toolbox decals
-  let { results } = await searchCatalog(keyword, catLower);
+  let { results, source } = await searchCatalog(keyword, catLower);
   if (results.length === 0) {
-    results = (await searchToolbox(keyword, TOOLBOX_TYPES.decals)).results;
+    const fallback = await searchToolbox(keyword, TOOLBOX_TYPES.decals);
+    results = fallback.results;
+    source = fallback.source;
   }
-  return { results };
+  return { results, source };
+}
+
+// ── Build the payload the frontend "Retrox Verified Asset Search" card renders ──
+function buildAssetSearchPayload(searches: SearchRecord[], content: string): Record<string, unknown> | null {
+  if (searches.length === 0) return null;
+
+  // Which asset IDs did the model actually embed in its code?
+  const usedIds = new Set<number>();
+  for (const m of content.matchAll(/rbxassetid:\/\/(\d+)/g)) {
+    usedIds.add(Number(m[1]));
+  }
+
+  // Flatten to at most 5 unique assets (in search order)
+  const seen = new Set<number>();
+  const assets: Array<Record<string, unknown>> = [];
+  for (const s of searches) {
+    for (const r of s.results) {
+      if (seen.has(r.id) || assets.length >= 5) continue;
+      seen.add(r.id);
+      assets.push({
+        id: r.id,
+        name: r.name,
+        kind: s.kind,
+        creator: r.creatorName || "Unknown",
+        thumbnail_url: r.thumbnailUrl,
+        source_url: `https://www.roblox.com/catalog/${r.id}`,
+        used_in_build: usedIds.has(r.id),
+      });
+    }
+  }
+
+  const chosen = assets.filter((a) => a.used_in_build);
+  const kwList = searches.map((s) => `"${s.keyword}"`).join(", ");
+  let summary: string;
+  if (chosen.length === 1) {
+    summary =
+      `Retrox live-searched ${kwList} and reviewed ${assets.length} verified result(s). ` +
+      `It chose ${chosen[0].name} (ID ${chosen[0].id}) for this build — the ${chosen[0].kind} is embedded in the code.`;
+  } else if (chosen.length > 1) {
+    summary =
+      `Retrox live-searched ${kwList} and reviewed ${assets.length} verified result(s). ` +
+      `It used ${chosen.length} of them in the build: ` +
+      chosen.map((a) => `${a.name} (ID ${a.id})`).join(", ") + ".";
+  } else {
+    summary =
+      `Retrox live-searched ${kwList} and found ${assets.length} verified result(s). ` +
+      `The best matches are listed below — Retrox picked the closest one for the code.`;
+  }
+
+  const sources = searches.slice(0, 3).map((s) => ({
+    name: s.source,
+    status: s.results.length > 0 ? "verified live" : "no results",
+    count: s.results.length,
+    note: `keyword: ${s.keyword}${s.category && s.category !== "all" ? ` · category: ${s.category}` : ""}`,
+    url: `https://www.roblox.com/search/catalog?Keyword=${encodeURIComponent(s.keyword)}`,
+  }));
+
+  return { summary, assets, sources };
 }
 
 function json(request: Request, body: Record<string, unknown>, status = 200) {
@@ -205,9 +337,25 @@ function json(request: Request, body: Record<string, unknown>, status = 200) {
 
 // ─── Retrox building-skill system prompt ──────────────────────────────────────
 const BUILDING_SKILLS = `
-
 You are Retrox, the resident AI builder inside RetroStudio. You are a Luau and
-Roblox engineering expert. Follow these rules when you build:
+Roblox engineering expert.
+
+INTENT FIRST (decide before answering — most important):
+- CASUAL CHAT / GREETINGS / QUESTIONS: If the user greets you, asks who you are,
+  asks a general question, or is clearly just talking ("hi", "what can you do",
+  "how does X work"), reply in PLAIN CONVERSATIONAL TEXT ONLY. No Luau code.
+  No building. No encoder output. Keep it short and friendly.
+- ASSET SEARCH ONLY: If the user asks you to find/search an asset (decal, mesh,
+  sound, face, hat, texture) WITHOUT asking for a build or script, call
+  search_roblox_catalog and then reply in PLAIN TEXT ONLY — no code. Give the
+  best match's name, its ID as rbxassetid://<id>, and the creator. Optionally
+  add a one-line description and offer to build something with it.
+- BUILD REQUESTS: Only when the user clearly wants something built, changed,
+  scripted, or fixed do you output Luau code. Only then may a script card appear.
+- Never wrap a plain answer in code. Never emit Luau unless the user asked for
+  a build or an explicit code example.
+
+Follow these rules when you build:
 
 POSITIONING (most important):
 - Place parts precisely with CFrame.new(x, y, z) — a part's position is its center.
@@ -232,18 +380,90 @@ STRUCTURE & STYLE:
 - Add short "--" comments explaining key numbers (positions, sizes).
 
 ROBLOX ASSETS:
-- You cannot import raw 3D geometry. You CAN reference real catalog assets by ID:
-  set Decal.Texture, SpecialMesh.MeshId, or MeshPart.MeshId to "rbxassetid://<id>".
-- When a user wants a face, decal, hat, or mesh, call search_roblox_catalog FIRST
-  to find real asset IDs. Review up to 5 results, pick the best match, and embed
-  its rbxassetid:// in your code. Always say which asset you chose and why.
+- You cannot import raw 3D geometry. You CAN reference real catalog assets by ID.
+  Property names and casing matter — get them exactly right:
+    * Decal / Texture instance: Decal.Texture = "rbxassetid://<id>"
+    * Sound: Sound.SoundId = "rbxassetid://<id>"
+    * SpecialMesh: MeshId (mesh shape) and TextureId (surface texture) are TWO
+      SEPARATE properties — never combine them or put a texture ID into MeshId.
+      CRITICAL: MeshType MUST be Enum.MeshType.FileMesh for a custom MeshId to
+      render at all — any other MeshType (Head, Brick, Sphere, Cylinder, Torso,
+      Wedge, Prism, Pyramid, ParallelRamp, RightAngleRamp, CornerWedge) ignores
+      MeshId/TextureId and draws a built-in primitive instead. Example:
+        local mesh = Instance.new("SpecialMesh")
+        mesh.MeshType = Enum.MeshType.FileMesh
+        mesh.MeshId = "rbxassetid://<mesh id>"
+        mesh.TextureId = "rbxassetid://<texture id>"  -- omit ("") if there is no texture asset
+        mesh.Parent = part
+    * MeshPart (newer, preferred for real meshes): MeshPart.MeshId and
+      MeshPart.TextureID — note TextureID has a capital "ID" on MeshPart, unlike
+      SpecialMesh.TextureId. Do not mix up the casing between the two classes.
+- When a BUILD needs a face, decal, mesh, hat, or sound, call search_roblox_catalog
+  FIRST to find real asset IDs — always, even if you think you already know an ID.
+  Review the up to 5 results, pick the best match, and embed its rbxassetid:// in
+  your code. Always end with one line naming the chosen asset: "Chosen asset:
+  <name> (ID <id>) — <short reason>."
+- If a search returns no usable results, try again once with a broader or
+  different keyword/category before giving up. If nothing matches, tell the user
+  honestly instead of inventing an ID.
 - If the user just wants an asset ID, give the ID + name + creator directly.
 - NEVER invent an asset ID.
 
+REFERENCE IMAGES:
+- reference_asset_image pulls an asset's picture and shows it to the user as a visual
+  reference card. Call it only when seeing the asset actually helps the user decide
+  (decals, textures, faces, artwork). Never call it when the build needs no image.
+  You still cannot see images yourself — the card is for the user.
+
+ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode):
+- The in-app encoder converts your Luau into RetroStudio blocks using a limited block
+  set. Keep syntax as PLAIN as possible so the encoded script card always renders.
+  NEVER use:
+    * type annotations (x: number), --!strict headers, or generics
+    * string interpolation (use .. concatenation instead of template braces)
+    * goto/labels, continue (not real Luau anyway — use a flag var or nested if)
+    * compound assignment operators (+=, -=, *=, /=, //=, %=, ..=) — always write
+      the full form: x = x + 1
+    * compound/bitwise operators (&, |, ~, <<, >>)
+    * destructuring, multiple-return one-liners beyond simple local a, b = f()
+    * multi-line long-bracket comments --[[ ... ]] — use only single-line -- comments
+    * metatables / setmetatable / OOP class patterns — use plain functions and tables
+    * varargs (...) or deeply nested mixed array/hash table constructors
+  Prefer: local vars, Instance.new + one property assignment per line, if/elseif/else,
+  numeric for, while, simple named functions, CFrame/Vector3/Color3/UDim2 construction,
+  event connections (.Touched, MouseButton1Click, :Connect), :GetService for services.
+  One statement per line. Keep nesting shallow.
+- You may use PathfindingService, TweenService, Humanoids, RemoteEvents and similar
+  services when the build needs them, written in the same plain style.
+- If a build is unavoidably complex, still follow every rule above — simplicity is
+  what makes the encoder succeed, not shorter code.
+
 RESPONSE FORMAT:
 - Plain text only — no markdown, no **, no triple backticks, no headers with #.
-- Lead with one short sentence about what you built, then the Luau code.
+- For chat/asset-search answers: plain text only, no code block at all.
+- For builds: lead with a SHORT CONTEXT SUMMARY (1-3 plain sentences, no code) covering
+  what the script does, the key objects/instances it creates or modifies, which
+  events it hooks (if any), and which asset IDs are embedded (if any) — then the
+  Luau code. This summary is required for every build so the user knows what the
+  script contains before they encode or paste it.
 - Keep code complete and paste-ready.`;
+
+// Appended only for Coder mode: complex builds may need more than one script.
+const CODER_MULTI_SCRIPT_ADDENDUM = `
+
+CODER MODE — MULTIPLE SCRIPTS WHEN THE BUILD NEEDS THEM:
+- The user is in Coder mode (highest-effort mode) for agentic/complex programming.
+  When the task genuinely needs separation — e.g. a server Script plus a client
+  LocalScript, a main system plus a supporting ModuleScript, or several independent
+  features — output MULTIPLE complete, separate scripts in one response.
+- Only split when there is a real reason (different Script type, different
+  instance/location, or a clean separation of concerns). A small single-purpose
+  request is still just ONE script — do not split for the sake of splitting.
+- Format each script as its own block, in order:
+  "Script 1 — <where it goes, e.g. ServerScriptService> (<Script|LocalScript|ModuleScript>): <one-line purpose>"
+  followed by a 1-2 sentence context summary for THAT script, then its Luau code.
+  Repeat "Script 2 — ...", "Script 3 — ..." for each additional script.
+- Every individual script must still follow all ENCODER-FRIENDLY LUAU rules above.`;
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -262,7 +482,19 @@ Deno.serve(async (request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const groqKey = Deno.env.get("GROQ_API_KEY");
-  if (!supabaseUrl || !supabaseAnonKey || !groqKey) {
+  const openrouterKey = Deno.env.get("OPENROUTER_API_KEY");
+
+  // Provider fallback chain: Groq gpt-oss-20b -> Groq llama-3.3-70b -> OpenRouter gpt-oss-20b
+  type Provider = { name: string; url: string; key: string; model: string };
+  const PROVIDERS: Provider[] = [];
+  if (groqKey) {
+    PROVIDERS.push({ name: "groq", url: GROQ_URL, key: groqKey, model: "openai/gpt-oss-20b" });
+    PROVIDERS.push({ name: "groq", url: GROQ_URL, key: groqKey, model: "llama-3.3-70b-versatile" });
+  }
+  if (openrouterKey) {
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b" });
+  }
+  if (!supabaseUrl || !supabaseAnonKey || PROVIDERS.length === 0) {
     return json(request, { error: "Free AI is temporarily unavailable" }, 503);
   }
 
@@ -279,7 +511,7 @@ Deno.serve(async (request) => {
     return json(request, { error: "Invalid session" }, 401);
   }
 
-  let body: { prompt?: unknown; system?: unknown; mode?: unknown };
+  let body: { prompt?: unknown; system?: unknown; mode?: unknown; stream?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -289,6 +521,7 @@ Deno.serve(async (request) => {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const system = typeof body.system === "string" ? body.system.trim() : "";
   const mode = typeof body.mode === "string" ? body.mode : "fast";
+  const wantsStream = body.stream === true;
   if (!prompt || prompt.length > 2000 || !system || system.length > 18000) {
     return json(request, { error: "Prompt is invalid or too large" }, 400);
   }
@@ -298,6 +531,7 @@ Deno.serve(async (request) => {
 
   // ── Token deduction (first pass: base cost, server-decided) ─────────────
   type TokenRow = { tokens_remaining?: number; reset_at?: string | null; tokens_charged?: number };
+  const CHARGE_BASE = CHARGE_BY_MODE[mode] ?? 3;
   let creditRows: TokenRow | TokenRow[] | null = null;
   let creditError: { message?: string } | null = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -308,98 +542,345 @@ Deno.serve(async (request) => {
     if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   if (creditError) {
-    const message = creditError.message || "";
-    const exhausted = /exhausted/i.test(message);
     return json(request, {
-      error: exhausted ? "Free AI tokens are exhausted" : "Free AI tokens are being prepared. Try again in a moment.",
-    }, exhausted ? 429 : 503);
+      error: "Free AI tokens are being prepared. Try again in a moment.",
+    }, 503);
   }
   let credit = Array.isArray(creditRows) ? creditRows[0] : creditRows;
   let tokensRemaining = Number(credit?.tokens_remaining ?? 0);
   let tokensCharged = Number(credit?.tokens_charged ?? CHARGE_BASE);
 
-  await new Promise((resolve) => setTimeout(resolve, 900));
-  const maxCompletionTokens = 4096;
-  const reasoningEffort = mode === "plan" || mode === "think" ? "medium" : "low";
+  // tokens_charged === 0 means the RPC deducted nothing — the account truly
+  // doesn't have enough for this mode. Report the REAL remaining balance and
+  // the cheapest mode that would fit, instead of a blind "exhausted" message.
+  if (tokensCharged === 0) {
+    const resetAt = credit?.reset_at ?? null;
+    const affordable = Object.entries(CHARGE_BY_MODE)
+      .filter(([, cost]) => cost <= tokensRemaining)
+      .sort((a, b) => a[1] - b[1])[0];
+    let hint: string;
+    if (tokensRemaining <= 0) {
+      hint = "You're out of Retrox tokens.";
+    } else if (affordable) {
+      hint = `You have ${tokensRemaining} Retrox token${tokensRemaining === 1 ? "" : "s"} left — ` +
+        `${mode} mode needs ${CHARGE_BASE}. Try ${affordable[0]} mode (${affordable[1]}cr) instead.`;
+    } else {
+      hint = `You have ${tokensRemaining} Retrox token${tokensRemaining === 1 ? "" : "s"} left — not enough for any mode right now.`;
+    }
+    if (resetAt) {
+      const mins = Math.max(0, Math.round((new Date(resetAt).getTime() - Date.now()) / 60000));
+      const hours = Math.floor(mins / 60);
+      hint += hours > 0 ? ` Refills in ${hours}h ${mins % 60}m.` : ` Refills in ${mins}m.`;
+    }
+    return json(request, {
+      error: hint,
+      tokens_remaining: tokensRemaining,
+      reset_at: resetAt,
+      mode_prices: MODE_PRICES_PUBLIC,
+    }, 402);
+  }
 
-  const groundedSystem = system + BUILDING_SKILLS;
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const TOKEN_BUDGET_BY_MODE: Record<string, number> = {
+    fast: 2560, auto: 3584, plan: 4096, think: 4096, long: 6144, coder: 7168,
+  };
+  const maxCompletionTokens = TOKEN_BUDGET_BY_MODE[mode] ?? 4096;
+  const reasoningEffort = mode === "fast" || mode === "auto" ? "low" : "medium";
+
+  const groundedSystem = system + BUILDING_SKILLS + (mode === "coder" ? CODER_MULTI_SCRIPT_ADDENDUM : "");
+  const forceSearchTool = ASSET_KEYWORD_RE.test(prompt) && BUILD_INTENT_RE.test(prompt);
 
   const conversation: Array<Record<string, unknown>> = [
     { role: "system", content: groundedSystem },
     { role: "user", content: prompt },
   ];
 
+  const searches: SearchRecord[] = [];
+
+  // ── SSE plumbing (live search events) ───────────────────────────────────
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let sseStream: ReadableStream<Uint8Array> | null = null;
+  if (wantsStream) {
+    sseStream = new ReadableStream({
+      start(controller) { streamController = controller; },
+    });
+  }
+  function sse(event: string, data: unknown) {
+    if (!streamController) return;
+    try {
+      streamController.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    } catch { /* client gone */ }
+  }
+
   let finalContent: string | null = null;
-  let assetsFound: CatalogAsset[] = [];
   let usedToolCall = false;
-  let usedModel = GROQ_MODELS[0];
+  let usedReference = false;
+  let usedModel = "openai/gpt-oss-20b";
+
+  // Pull one asset's image as a visual reference for the user (no charge).
+  async function referenceAssetImage(args: { asset_id?: unknown; keyword?: unknown; category?: unknown }): Promise<{ name: string; id: number | null; thumbnailUrl: string | null; kind: string } | null> {
+    const catLower = String(args.category || "").toLowerCase();
+    if (typeof args.asset_id === "number" && Number.isFinite(args.asset_id)) {
+      const id = args.asset_id;
+      const thumbs = await fetchThumbnails([id]);
+      let name = "Roblox asset";
+      try {
+        const dparams = new URLSearchParams({ assetIds: String(id) });
+        const dresp = await fetch(`${TOOLBOX_DETAILS_URL}?${dparams.toString()}`, { headers: httpHeaders(Deno.env.get("ROBLOX_API_KEY")), signal: AbortSignal.timeout(7000) });
+        if (dresp.ok) {
+          const dbody = await dresp.json();
+          const item = Array.isArray(dbody?.data) ? dbody.data[0] : null;
+          if (item?.asset?.name) name = String(item.asset.name);
+        }
+      } catch { /* best-effort */ }
+      return { name, id, thumbnailUrl: thumbs.get(id) ?? null, kind: "asset" };
+    }
+    const keyword = String(args.keyword || "").slice(0, 100);
+    if (!keyword) return null;
+    const typeKey = catLower in TOOLBOX_TYPES ? catLower : "decals";
+    const { results } = await searchToolbox(keyword, TOOLBOX_TYPES[typeKey]);
+    if (results.length === 0) return null;
+    const best = results[0];
+    return { name: best.name, id: best.id, thumbnailUrl: best.thumbnailUrl, kind: KIND_BY_CATEGORY[typeKey] || "asset" };
+  }
+
+  // Stream a provider completion, forwarding text deltas live to the client.
+  async function streamCompletion(provider: Provider, messages: Array<Record<string, unknown>>, reasoning: string): Promise<{ content: string | null; error: string | null }> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${provider.key}`,
+      "Content-Type": "application/json",
+    };
+    if (provider.name === "openrouter") {
+      headers["HTTP-Referer"] = "https://retrostudioencoderbeta.onrender.com";
+      headers["X-Title"] = "RetroStudio Encoder";
+    }
+    const requestBody: Record<string, unknown> = {
+      model: provider.model,
+      messages,
+      max_completion_tokens: maxCompletionTokens,
+      temperature: 0.6,
+      stream: true,
+      ...(provider.name === "groq" ? { include_reasoning: false, reasoning_effort: reasoning } : {}),
+    };
+    let content = "";
+    try {
+      const response = await fetch(provider.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!response.ok || !response.body) return { content: null, error: `status ${response.status}` };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t.startsWith("data:")) continue;
+          const payload = t.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            const j = JSON.parse(payload);
+            const delta = j?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length) {
+              content += delta;
+              sse("content", { text: delta });
+            }
+          } catch { /* skip malformed frame */ }
+        }
+      }
+    } catch (err) {
+      // partial content already shown: accept it instead of duplicating
+      if (content) return { content, error: null };
+      return { content: null, error: err instanceof Error ? err.message : "network error" };
+    }
+    return { content: content || null, error: null };
+  }
+
+  // Plain (non-stream) completion — used for the tool round and as a final fallback.
+  async function plainCompletion(provider: Provider, messages: Array<Record<string, unknown>>, reasoning: string, withTools: boolean, toolChoice?: unknown): Promise<{ message: any; error: string | null }> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${provider.key}`,
+      "Content-Type": "application/json",
+    };
+    if (provider.name === "openrouter") {
+      headers["HTTP-Referer"] = "https://retrostudioencoderbeta.onrender.com";
+      headers["X-Title"] = "RetroStudio Encoder";
+    }
+    const requestBody: Record<string, unknown> = {
+      model: provider.model,
+      messages,
+      max_completion_tokens: maxCompletionTokens,
+      temperature: 0.6,
+      ...(provider.name === "groq" ? { include_reasoning: false, reasoning_effort: reasoning } : {}),
+      ...(withTools ? { tools: [CATALOG_TOOL, REFERENCE_TOOL], tool_choice: toolChoice ?? "auto" } : {}),
+    };
+    try {
+      const response = await fetch(provider.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30000),
+      });
+      const parsed = await response.json().catch(() => null);
+      if (response.ok && parsed?.choices?.length) return { message: parsed.choices[0].message, error: null };
+      return { message: null, error: parsed?.error?.message || `status ${response.status}` };
+    } catch (err) {
+      return { message: null, error: err instanceof Error ? err.message : "network error" };
+    }
+  }
+
+  // One tool call's worth of work: search or reference. Shared by the initial
+  // tool round and the single empty-search retry below.
+  async function handleToolCall(call: any): Promise<void> {
+    let args: { keyword?: string; category?: string; asset_id?: number; note?: string } = {};
+    try { args = JSON.parse(call.function?.arguments || "{}"); } catch { /* ignore malformed args */ }
+    const fname = String(call.function?.name || "");
+    if (fname === "reference_asset_image") {
+      usedReference = true;
+      const ref = await referenceAssetImage(args);
+      const note = String(args.note || "").slice(0, 80);
+      if (ref) {
+        sse("reference", { name: ref.name, id: ref.id, kind: ref.kind, thumbnail_url: ref.thumbnailUrl, note });
+        conversation.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ shown_to_user: true, id: ref.id, name: ref.name, thumbnailUrl: ref.thumbnailUrl, rbxAssetId: ref.id ? `rbxassetid://${ref.id}` : null, note }) });
+      } else {
+        sse("reference", { name: "Reference image unavailable", id: null, kind: "asset", thumbnail_url: null, note: note || "No matching Roblox asset was found" });
+        conversation.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ shown_to_user: false, error: "No matching Roblox asset found for the reference request" }) });
+      }
+      return;
+    }
+    const keyword = String(args.keyword || "").slice(0, 100);
+    const category = String(args.category || "all");
+    const { results, source } = await searchRobloxCatalog(keyword, category);
+    const record: SearchRecord = {
+      keyword: keyword || "(unspecified)",
+      category,
+      kind: kindFor(category),
+      source,
+      results,
+    };
+    searches.push(record);
+    // Live event: every result searched for (max 5), with thumbnails.
+    sse("search", {
+      keyword: record.keyword,
+      category: record.category,
+      kind: record.kind,
+      source: record.source,
+      results: results.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: record.kind,
+        creator: r.creatorName || "Unknown",
+        thumbnail_url: r.thumbnailUrl,
+      })),
+    });
+    const toolResult = JSON.stringify({ results: results.map((r) => ({
+      id: r.id, name: r.name, rbxAssetId: r.rbxAssetId,
+      creatorName: r.creatorName, thumbnailUrl: r.thumbnailUrl,
+    })) });
+    conversation.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+  }
 
   for (let round = 0; round < 2; round += 1) {
-    let groqResponse: Response | null = null;
-    let groqBody: any = null;
-    let lastError = "provider unavailable";
-
-    // Provider fallback chain: primary model, then fallback model.
-    for (const model of GROQ_MODELS) {
-      try {
-        const response = await fetch(GROQ_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${groqKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: conversation,
-            max_completion_tokens: maxCompletionTokens,
-            temperature: 0.6,
-            include_reasoning: false,
-            reasoning_effort: reasoningEffort,
-            ...(round === 0 ? { tools: [CATALOG_TOOL], tool_choice: "auto" } : {}),
-          }),
-          signal: AbortSignal.timeout(30000),
-        });
-        const parsed = await response.json().catch(() => null);
-        if (response.ok && parsed) {
-          groqResponse = response;
-          groqBody = parsed;
-          usedModel = model;
-          break;
-        }
-        lastError = parsed?.error?.message || `status ${response.status}`;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : "network error";
+    // Tool round: non-streamed so tool_calls arrive in one shot.
+    if (round === 0) {
+      let message: any = null;
+      let lastError = "provider unavailable";
+      const toolChoice = forceSearchTool
+        ? { type: "function", function: { name: "search_roblox_catalog" } }
+        : "auto";
+      for (const provider of PROVIDERS) {
+        const res = await plainCompletion(provider, conversation, reasoningEffort, true, toolChoice);
+        if (res.message) { message = res.message; usedModel = `${provider.model} (${provider.name})`; break; }
+        lastError = res.error || lastError;
       }
-    }
-    if (!groqResponse || !groqBody) {
-      return json(request, { error: "Free AI provider is unavailable; " + tokensCharged + " token(s) were used" }, 502);
-    }
-
-    const message = groqBody?.choices?.[0]?.message;
-    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
-
-    if (toolCalls.length > 0 && round === 0) {
+      if (!message) {
+        const errPayload = { error: "Free AI provider is unavailable; " + tokensCharged + " token(s) were used", status: 502 };
+        if (streamController) {
+          sse("error", errPayload);
+          try { streamController.close(); } catch { /* already closed */ }
+          return new Response(sseStream, { headers: { ...corsHeadersFor(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+        }
+        return json(request, errPayload, 502);
+      }
+      const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+      if (toolCalls.length === 0) {
+        finalContent = typeof message?.content === "string" ? message.content : null;
+        break;
+      }
       usedToolCall = true;
       conversation.push({ role: "assistant", content: message.content ?? null, tool_calls: toolCalls });
       for (const call of toolCalls.slice(0, 3)) {
-        let args: { keyword?: string; category?: string } = {};
-        try { args = JSON.parse(call.function?.arguments || "{}"); } catch {}
-        const { results } = await searchRobloxCatalog(String(args.keyword || ""), String(args.category || "all"));
-        assetsFound = assetsFound.concat(results).slice(0, 5);
-        const toolResult = JSON.stringify({ results: results.map((r) => ({
-          id: r.id, name: r.name, rbxAssetId: r.rbxAssetId,
-          creatorName: r.creatorName, thumbnailUrl: r.thumbnailUrl,
-        })) });
-        conversation.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+        await handleToolCall(call);
+      }
+
+      // Reliability fix: if every search call in this round came back empty
+      // (bad keyword/category, rate limit, etc.), give the model exactly ONE
+      // more non-streamed chance to retry with a different keyword/category
+      // before it has to answer — instead of silently giving up on the asset.
+      const allSearchesEmpty = searches.length > 0 && searches.every((s) => s.results.length === 0);
+      if (allSearchesEmpty) {
+        conversation.push({
+          role: "system",
+          content: "Your catalog search returned zero results. Call search_roblox_catalog ONE more time " +
+            "with a broader or different keyword/category (drop adjectives, try a synonym, or switch category) " +
+            "if that seems likely to help. If you're confident nothing will match, tell the user honestly " +
+            "instead of inventing an asset ID.",
+        });
+        let retryMessage: any = null;
+        for (const provider of PROVIDERS) {
+          const res = await plainCompletion(provider, conversation, reasoningEffort, true);
+          if (res.message) { retryMessage = res.message; usedModel = `${provider.model} (${provider.name})`; break; }
+        }
+        const retryToolCalls = Array.isArray(retryMessage?.tool_calls) ? retryMessage.tool_calls : [];
+        if (retryToolCalls.length > 0) {
+          conversation.push({ role: "assistant", content: retryMessage.content ?? null, tool_calls: retryToolCalls });
+          for (const call of retryToolCalls.slice(0, 3)) {
+            await handleToolCall(call);
+          }
+        } else if (typeof retryMessage?.content === "string" && retryMessage.content.trim()) {
+          // Model answered directly on the retry without another tool call — use it as-is.
+          finalContent = retryMessage.content;
+          break;
+        }
       }
       continue;
     }
 
-    finalContent = typeof message?.content === "string" ? message.content : null;
+    // Final round: stream the answer live; provider fallback chain still applies.
+    let streamFailed = true;
+    for (const provider of PROVIDERS) {
+      const res = await streamCompletion(provider, conversation, reasoningEffort);
+      if (res.content) {
+        finalContent = res.content;
+        usedModel = `${provider.model} (${provider.name})`;
+        streamFailed = false;
+        break;
+      }
+      if (res.error) continue;
+    }
+    if (streamFailed) {
+      // Streaming unavailable on every provider: last-chance plain completion.
+      for (const provider of PROVIDERS) {
+        const res = await plainCompletion(provider, conversation, reasoningEffort, false);
+        if (res.message && typeof res.message?.content === "string" && res.message.content.trim()) {
+          finalContent = res.message.content;
+          usedModel = `${provider.model} (${provider.name})`;
+          break;
+        }
+      }
+    }
     break;
   }
 
-  // ── If live catalog search was used, charge the extra credits ───────────
+// ── If live catalog search was used, charge the extra credits ───────────
   if (usedToolCall) {
     const { data: extraCredit, error: extraError } = await userClient.rpc("consume_free_ai_tokens", { p_count: CHARGE_SEARCH_EXTRA });
     if (!extraError) {
@@ -413,23 +894,49 @@ Deno.serve(async (request) => {
   }
 
   if (!finalContent) {
-    return json(request, { error: "Free AI returned no usable response" }, 502);
+    const errPayload = { error: "Free AI returned no usable response", status: 502 };
+    if (streamController) {
+      sse("error", errPayload);
+      try { streamController.close(); } catch { /* already closed */ }
+      return new Response(sseStream, { headers: { ...corsHeadersFor(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
+    return json(request, errPayload, 502);
   }
 
   // Plain-text hygiene: strip markdown fences if the model added them anyway.
   let content = finalContent;
   content = content.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
   if (content.trim().length === 0) {
-    return json(request, { error: "Free AI returned no usable response" }, 502);
+    const errPayload = { error: "Free AI returned no usable response", status: 502 };
+    if (streamController) {
+      sse("error", errPayload);
+      try { streamController.close(); } catch { /* already closed */ }
+      return new Response(sseStream, { headers: { ...corsHeadersFor(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
+    return json(request, errPayload, 502);
   }
 
-  return json(request, {
+  const assetsFound = searches.flatMap((s) => s.results).slice(0, 5);
+  const robloxAssetSearch = buildAssetSearchPayload(searches, content);
+  const finalPayload = {
     content,
     tokens_remaining: tokensRemaining,
     tokens_used: tokensCharged,
     reset_at: credit?.reset_at ?? null,
     model: usedModel,
+    mode: mode,
+    mode_prices: MODE_PRICES_PUBLIC,
+    charge_base: CHARGE_BASE,
     used_live_search: usedToolCall,
+    used_reference: usedReference,
     assets_found: assetsFound,
-  });
+    roblox_asset_search: robloxAssetSearch,
+  };
+
+  if (streamController) {
+    sse("done", finalPayload);
+    try { streamController.close(); } catch { /* already closed */ }
+    return new Response(sseStream, { headers: { ...corsHeadersFor(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+  }
+  return json(request, finalPayload);
 });
