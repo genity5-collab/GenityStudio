@@ -498,6 +498,16 @@ ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode
   may end with an unclosed parenthesis, a trailing comma, or a dangling operator.
 - You may use PathfindingService, TweenService, Humanoids, RemoteEvents and similar
   services when the build needs them, written in the same plain style.
+- AVOID CUSTOM FUNCTIONS (local function foo(...) ... end) IN BOTH SCRIPTS, not just
+  the model script. Function-definition/call blocks are the least reliable part of
+  the encoder and are the most common reason a Main Script fails to import even
+  though a Model Script with the same style works fine. Instead:
+  * Write logic directly inline inside each event handler (.Touched:Connect(function()
+    ... end), MouseButton1Click:Connect(function() ... end)) — duplicate a few lines
+    of code across handlers rather than factoring out a shared helper function.
+  * If a script genuinely needs the exact same block repeated 3+ times, still prefer
+    explicit repetition over a helper function — repetition encodes reliably,
+    functions do not.
 - If a build is unavoidably complex, still follow every rule above — simplicity is
   what makes the encoder succeed, not shorter code.
 
@@ -525,6 +535,17 @@ MODEL-FIRST BUILD ORDER (required for every build that creates a physical model)
         the parent argument. Do NOT call game:GetService in model scripts —
         use the bare workspace global.
       - Anchored = true on every structural part so the build does not fall.
+    * MANDATORY CHECKLIST — verify ALL of these before you print the final line,
+      go back and add whatever is missing:
+      1. ROOF: any house/building/shop/booth needs a roof — a slanted pair of
+         angled Part "panels" (CFrame.Angles) or a flat cap Part covering the top.
+         A structure with 4 walls and no roof is NOT finished.
+      2. COLOR + MATERIAL on every single part: BrickColor.new(...) or Color3, AND
+         Material = Enum.Material.X. A part left at default gray Plastic is a bug.
+      3. Every SpecialMesh has MeshType, MeshId, and TextureId set (TextureId = ""
+         only when the search genuinely found no separate texture asset) and a
+         Scale near Vector3.new(1,1,1) (see the mesh Scale rules above).
+      4. Every Decal has Texture set, every Sound has SoundId set.
     * End it with exactly: print("Model built - you can delete this script now")
     * After the code, tell the user: "Run this script in RetroStudio Studio first
       (paste in the command bar or run once) so the model appears in the world.
@@ -710,7 +731,7 @@ Deno.serve(async (request) => {
 
   await new Promise((resolve) => setTimeout(resolve, 900));
   const TOKEN_BUDGET_BY_MODE: Record<string, number> = {
-    fast: 3584, auto: 4608, plan: 5120, think: 5120, long: 7168, coder: 8192,
+    fast: 4352, auto: 5632, plan: 6144, think: 6656, long: 8704, coder: 9728,
   };
   const maxCompletionTokens = TOKEN_BUDGET_BY_MODE[mode] ?? 4096;
   const reasoningEffort = mode === "fast" || mode === "auto" ? "low" : "medium";
