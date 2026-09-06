@@ -2956,7 +2956,8 @@ We found your existing local account. After login, your data will be migrated au
     return srvCredits ? srvCredits.v : null;
   }
 
-  /* apply the last persisted server balance once the HUD exists */
+  /* apply the last persisted server balance once the HUD exists (cache only —
+     may be stale/absent on a different device; the real peek below corrects it) */
   (function restoreCredits() {
     loadCredits();
     if (!srvCredits) return;
@@ -2970,6 +2971,46 @@ We found your existing local account. After login, your data will be migrated au
       }
     }, 400);
   })();
+
+  /* ── True balance on page load (no charge) ────────────────────────────────
+     The HUD used to show whatever number was hardcoded/cached, which could
+     read "25" on a fresh device while the account itself (server-side, shared
+     across devices) was actually down to 1 — very confusing. Peek the real
+     balance from Supabase directly via REST as soon as a session is found,
+     on every load, so the HUD always tells the truth before any message. */
+  var SB_URL = "https://gbnxvwglnwwsssqkcezy.supabase.co";
+  var SB_ANON = "sb_publishable_8awdvURLl4wDCbMNPiZT9g_Aa-GSmII";
+
+  function findSupabaseAccessToken() {
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k || !/^sb-.*-auth-token$/.test(k)) continue;
+        try {
+          var v = JSON.parse(localStorage.getItem(k));
+          var tok = (v && v.access_token) || (v && v.currentSession && v.currentSession.access_token);
+          if (tok) return tok;
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function peekRealBalance() {
+    var tok = findSupabaseAccessToken();
+    if (!tok) { setTimeout(peekRealBalance, 900); return; }
+    _origFetch(SB_URL + "/rest/v1/rpc/peek_free_ai_tokens", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + tok, "apikey": SB_ANON, "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (r) { return r.ok ? r.json() : null; }).then(function (rows) {
+      var row = Array.isArray(rows) ? rows[0] : rows;
+      if (row && typeof row.tokens_remaining === "number") {
+        saveCredits(row.tokens_remaining, row.reset_at);
+      }
+    }).catch(function () {});
+  }
+  setTimeout(peekRealBalance, 600);
 
   /* ── 4a. SSE plumbing ───────────────────────────────────────────────────── */
   var chosenAssetIds = [];
@@ -2998,6 +3039,8 @@ We found your existing local account. After login, your data will be migrated au
         /* non-stream answer (e.g. validation error): close the activity card */
         var clone = resp.clone();
         clone.json().then(function (d) {
+          try { if (d && typeof d.tokens_remaining === "number") saveCredits(d.tokens_remaining, d.reset_at); } catch (e) {}
+          try { if (d && d.mode_prices) updateModePrices(d.mode_prices); } catch (e) {}
           if (d && d.error) actFail(String(d.error));
           else actFinish(false, d);
         }).catch(function () { actFail("No response from the AI service"); });
@@ -3877,6 +3920,36 @@ We found your existing local account. After login, your data will be migrated au
     }, 400);
   })();
 
+  /* ── 6b. HUD chip icons: purpose-built token + coder glyphs (replaces the
+     generic star and an unrelated command-key symbol) ──────────────────── */
+  function hudIconSvg(paths, gradId, c1, c2) {
+    return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<defs><linearGradient id="' + gradId + '" x1="0" y1="0" x2="24" y2="24">' +
+      '<stop offset="0" stop-color="' + c1 + '"/><stop offset="1" stop-color="' + c2 + '"/></linearGradient></defs>' +
+      paths.replace(/CURR/g, "url(#" + gradId + ")") + "</svg>";
+  }
+  function upgradeHudIcons() {
+    var tok = document.querySelector("#freeCreditChip .currency-icon");
+    if (tok && !tok.__rsxHud) {
+      tok.__rsxHud = true;
+      tok.innerHTML = hudIconSvg(
+        '<circle cx="12" cy="12" r="9" fill="CURR" opacity=".22"/>' +
+        '<circle cx="12" cy="12" r="9" stroke="CURR" stroke-width="1.6"/>' +
+        '<path d="M12 8.4v7.2M9.6 10.2c0-1 .9-1.4 2.4-1.4s2.4.5 2.4 1.3c0 1.9-4.8 .8-4.8 2.9 0 .9 1 1.4 2.4 1.4s2.4-.5 2.4-1.4" stroke="CURR" stroke-width="1.3" stroke-linecap="round" fill="none"/>',
+        "rsxTokGrad", "#a78bfa", "#22d3ee"
+      );
+    }
+    var cod = document.querySelector("#coderCreditChip .currency-icon");
+    if (cod && !cod.__rsxHud) {
+      cod.__rsxHud = true;
+      cod.innerHTML = hudIconSvg(
+        '<path d="M9 8.5 5.5 12 9 15.5M15 8.5 18.5 12 15 15.5" stroke="CURR" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>' +
+        '<path d="M13.2 6.5 10.8 17.5" stroke="CURR" stroke-width="1.6" stroke-linecap="round"/>',
+        "rsxCoderGrad", "#4ade80", "#22c55e"
+      );
+    }
+  }
+
   /* ── 7. Icon upgrade: crisp SVG icons replace emoji glyphs ─────────────── */
   var RSX_ICONS = {
     "\u{1F528}": "m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9m0-6 6.373 6.373a1 1 0 1 0 3 3L15 6",
@@ -3951,6 +4024,7 @@ We found your existing local account. After login, your data will be migrated au
   var rsxIconTimer = null;
   function rsxScheduleIcons() {
     typingIndicator();
+    try { upgradeHudIcons(); } catch (e) {}
     if (rsxIconTimer) return;
     rsxIconTimer = setTimeout(function () {
       rsxIconTimer = null;
