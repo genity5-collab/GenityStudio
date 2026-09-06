@@ -583,6 +583,32 @@ ENCODER-FRIENDLY LUAU (important — this is why builds sometimes fail to encode
   Prefer: local vars, Instance.new + one property assignment per line, if/elseif/else,
   numeric for, while, CFrame/Vector3/Color3/UDim2 construction, event connections
   (.Touched, MouseButton1Click, :Connect).
+  ENCODER NOW HANDLES THESE TOO — write them naturally (one statement per line):
+    * events and control flow NESTED inside loops/ifs/handlers (a MouseButton1Click
+      inside a for loop, an if inside a .Touched handler — all supported)
+    * simple table literals: local items = {Sword = 50, Shield = 30} or {50, 30, 10}
+      plus for k, v in pairs(items) do ... end — perfect for shop inventories
+    * string concat chains: btn.Text = name .. " - " .. price .. " Gold"
+    * chained WaitForChild: player:WaitForChild("leaderstats"):WaitForChild("Gold")
+    * property arithmetic: gold.Value = gold.Value - price (also with + * and vars)
+    * plain var arithmetic: y = y + 50
+    * property comparisons in if/while: if gold.Value >= price then
+    * warn("msg") alongside print("msg")
+    * markdown code fences (triple backticks) around your scripts are fine — stripped automatically
+  ONE CAVEAT: in a WHILE loop condition, an obj.Prop check is captured ONCE before
+  the loop starts. If the property must be re-checked every pass, update a plain
+  local inside the loop body and compare that local in the condition instead.
+  SUPPORTED EVENTS (exact names): .Touched, .TouchEnded, ClickDetector .MouseClick,
+  Humanoid .Died/.Running/.Jumping, .PlayerAdded, .PlayerRemoving,
+  .CharacterAdded, .ChildAdded, .ChildRemoved, .DescendantAdded, Heartbeat,
+  .MouseButton1Click (GUI buttons), Tool .Activated/.Equipped,
+  GetPropertyChangedSignal("Prop"), TextBox .FocusLost is NOT supported — use
+  MouseButton1Click on buttons or read the field at click time.
+  NEVER ATTEMPT (no block exists): coroutines (spawn aside from the Spawn block),
+  metatables/OOP, string.find/match/gsub on complex patterns beyond the provided
+  string blocks, os.date beyond basics, remote Client→Server firing from GUI
+  LocalScripts (GUI scripts run locally — keep leaderstats changes in the Main
+  server script and use the GUI only to fire or display).
   ONE STATEMENT PER LINE — NEVER wrap or split a statement across lines. No line
   may end with an unclosed parenthesis, a trailing comma, or a dangling operator.
 - You may use PathfindingService, TweenService, Humanoids, RemoteEvents and similar

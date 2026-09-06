@@ -4132,6 +4132,7 @@ function buildFromLua(lua){
   src=src.replace(/^[ \t]*local\s+([A-Za-z_]\w*)\s*=\s*\1[ \t]*\r?$/gm,"");
   src=src.replace(/\bconst\s+([A-Za-z_]\w*)(\s*:\s*[^=\n]+)?\s*=/g,"local $1 =");
   src=src.replace(/\blocal\s+([A-Za-z_]\w*)\s*:\s*[^=\n]+\s*=/g,"local $1 =");
+  src=src.replace(/^\s*```\w*\s*$/gm,"");
 
   var lines=src.split("\n").map(function(l){
     l=l.trim();if(!l||l[0]==="-"&&l[1]==="-"){if(l.length>2&&l[2]==="@"){return l;}return"";}
@@ -4184,6 +4185,7 @@ function buildFromLua(lua){
   }
   function cond(s){
     s=(s||"").trim();
+    s=propLoads(s);
     /* Legacy guard idiom: "obj and obj.Prop>x" / "obj.Prop>x and obj" → use just the comparison (common null-guard pattern) */
     var gL=s.match(/^([\w.]+)\s+and\s+(.+)$/);
     if(gL&&/^[\w.]+$/.test(gL[1])&&/(==|~=|>=|<=|>|<)/.test(gL[2])&&!/\s+(and|or)\s+/.test(gL[2]))s=gL[2].trim();
@@ -4213,6 +4215,7 @@ function buildFromLua(lua){
     return ESC+"Value 1"+tv("2","true","")+ESC+"Value 2"+tv("1","1","Bool")+ESC+"ComparisonType"+ESC+"0"+ESC+"==";
   }
   function wcond(s){
+    s=propLoads(s);
     var and_m=s.match(/^(?:[\w.]+\s+and\s+)+(.+)$/);if(and_m)s=and_m[1].trim();
     var or_m=s.match(/^(?:[\w.]+\s+or\s+)+(.+)$/);if(or_m)s=or_m[1].trim();
     var m=s.match(/^([\w.]+)\s*(==|~=|>=|<=|>|<)\s*(-?[\d.]+|["'].*?["']|\w+)\s*$/);
@@ -4263,6 +4266,27 @@ function buildFromLua(lua){
     while(num>0&&digits.length<12){num*=16;var d=Math.floor(num/den);digits+=d.toString(16).toUpperCase();num-=d*den;}
     return "0."+digits;
   }
+  function tokV(t){t=String(t||"").trim();if(/^["'].*["']$/.test(t))return tv("1",t.slice(1,-1),"String");var ft=foldN(t);if(ft!==null)return tv("1",hexF(ft),"Number");if(t==="true")return tv("1","1","Bool");if(t==="false")return tv("1","0","Bool");return tv("2",t.replace(/\s+/g,""),"");}
+  var PL_SKIP={Enum:1,BrickColor:1,Color3:1,Vector3:1,CFrame:1,UDim2:1,math:1,string:1,os:1,task:1,Instance:1,script:1,typeof:1};
+  function resolvePath(p,out){var segs=String(p).split(".");var cur=segs[0];for(var si=1;si<segs.length;si++){var tn="_rp"+(blocks.length+1);var bg=add("GetObjectProperty","Get Prop",ESC+"Object"+ESC+"0"+ESC+esc(cur)+ESC+"Property"+ESC+"0"+ESC+esc(segs[si]),ESC+"Value"+ESC+esc(tn));if(bg)out.push(bg);cur=tn;}return cur;}
+  function concatChain(expr,out,finalVar){var parts=String(expr).split("..");if(parts.length<2)return null;var cur=null;for(var pi=0;pi<parts.length;pi++){var tr=parts[pi].trim();var pv=(/^[A-Za-z_]\w*\.[A-Za-z_]\w*/.test(tr)&&tr.charCodeAt(0)!==39&&tr.charCodeAt(0)!==34)?tv("2",resolvePath(tr,out),""):tokV(parts[pi]);if(cur===null){cur=pv;continue;}var rn=(pi===parts.length-1)?finalVar:"_cc"+(blocks.length+1)+"_"+pi;var bc=add("Concatenate","Concat",ESC+"FirstString"+cur+ESC+"SecondString"+pv,ESC+"Result"+ESC+esc(rn));if(bc)out.push(bc);cur=tv("2",rn,"");}return cur;}
+  function propLoads(s){try{
+    var re=/([A-Za-z_]\w*)((?:\.[A-Za-z_]\w*)+)/g;var ms=[],mm;
+    while((mm=re.exec(s))){ms.push({idx:mm.index,full:mm[0],base:mm[1]});}
+    for(var qi=ms.length-1;qi>=0;qi--){
+      var h=ms[qi];var afterIdx=h.idx+h.full.length;
+      if(s.charAt(afterIdx)==="(")continue;
+      if(PL_SKIP[h.base])continue;
+      var segs=h.full.split(".").slice(1);
+      var cur=h.base;
+      for(var ri=0;ri<segs.length;ri++){
+        var tn="_cl"+(blocks.length+1);
+        var bg=add("GetObjectProperty","Get Prop",ESC+"Object"+ESC+"0"+ESC+esc(cur)+ESC+"Property"+ESC+"0"+ESC+esc(segs[ri]),ESC+"Value"+ESC+esc(tn));
+        if(bg)top.push(bg);cur=tn;
+      }
+      s=s.substring(0,h.idx)+cur+s.substring(afterIdx);
+    }
+  }catch(e){}return s;}
   function fxPattern(L){
     var m,b,b1,b2,vn;
     /* 1) plain numeric local — emit with real hex-fraction encoding + record for folding */
@@ -4335,6 +4359,14 @@ function buildFromLua(lua){
     return null;
   }
   function single(arr){
+    if(arr.length<2)return stmts(arr);
+    var _sl=lines,_st=top,_si=i;
+    lines=arr;top=[];i=0;
+    var _r=parseAll();
+    lines=_sl;top=_st;i=_si;
+    return _r;
+  }
+  function stmts(arr){
     var out=[];
     for(var k=0;k<arr.length;k++){var L=arr[k],m;
       var _fxb=fxPattern(L);
@@ -4343,6 +4375,9 @@ function buildFromLua(lua){
       m=L.match(/^print\s*\(\s*([\w.]+)\s*\)$/);if(m){var b=add("Print","Print",ESC+"Text"+tv("2",m[1],""),"");if(b)out.push(b);continue;}
       m=L.match(/^print\s*\(\s*["']([^"']*)["']\s*,\s*([\w.]+)\s*\)$/);if(m){var pn="_p"+out.length;var b1=add("Concatenate","Concat",ESC+"FirstString"+tv("1",m[1],"String")+ESC+"SecondString"+tv("2",m[2],""),ESC+"Result"+ESC+esc(pn));if(b1)out.push(b1);var b2=add("Print","Print",ESC+"Text"+tv("2",pn,""),"");if(b2)out.push(b2);continue;}
       m=L.match(/^print\s*\(\s*([\w.]+)\s*,\s*([\w.]+)\s*\)$/);if(m){var pn="_p"+out.length;var b1=add("Concatenate","Concat",ESC+"FirstString"+tv("2",m[1],"")+ESC+"SecondString"+tv("2",m[2],""),ESC+"Result"+ESC+esc(pn));if(b1)out.push(b1);var b2=add("Print","Print",ESC+"Text"+tv("2",pn,""),"");if(b2)out.push(b2);continue;}
+      m=L.match(/^print\s*\((.+)\)$/);if(m&&m[1].indexOf("..")>=0&&m[1].charAt(0)!=="'"){var pn2="_pc"+(blocks.length+1);var cr=concatChain(m[1],out,pn2);if(cr!==null){var bp=add("Print","Print",ESC+"Text"+tv("2",pn2,""),"");if(bp)out.push(bp);continue;}}
+      m=L.match(/^warn\s*\(([^)]*)\)$/);if(m){var aW=parseArgs(m[1]);var bW=add("Warn","Warn",argsStr(aW,"TUPLEPARAM_Parameters"),"");if(bW)out.push(bW);continue;}
+      m=L.match(/^error\s*\(([^)]*)\)$/);if(m){var aE=parseArgs(m[1]);var bE=add("Error","Error",argsStr(aE,"TUPLEPARAM_Parameters"),"");if(bE)out.push(bE);continue;}
       m=L.match(/^(?:task\.)?wait\s*\(\s*([\d.]*)\s*\)$/);if(m){var wv=m[1]||"0.03";var b=add("Wait","Wait",ESC+"Time"+ESC+"0"+ESC+esc(wv),"");if(b)out.push(b);continue;}if(m){var b=add("Wait","Wait",ESC+"Time"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^return\s+(.+)$/);if(m){var rv=m[1].trim(),p;
         if(/^-?\d+(\.\d+)?$/.test(rv))p=tv("1",hexN(rv),"Number");
@@ -4384,11 +4419,14 @@ function buildFromLua(lua){
       m=L.match(/^local\s+(\w+)\s*=\s*not\s+(\w+)$/);if(m){var b=add("NOTAny","NOT",ESC+"Variable"+tv("2",m[2],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*#(\w+)$/);if(m){var b=add("GetTableLength","Get Table Length",ESC+"Table"+ESC+"0"+ESC+esc(m[2]),ESC+"Length"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\+\s*(\w+)$/);if(m){var b=add("Addition","Addition",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
+      m=L.match(/^(\w+)\s*=\s*([A-Za-z_]\w*|-?[\d.]+)\s*([+\-*/%])\s*([A-Za-z_]\w*|-?[\d.]+)$/);if(m){var oT=m[3]==="+"?"Addition":m[3]==="-"?"Subtraction":m[3]==="*"?"Multiplication":m[3]==="/"?"Division":"Modulus";var b=add(oT,oT,ESC+"Number1"+tokV(m[2])+ESC+"Number2"+tokV(m[4]),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*-\s*(\w+)$/);if(m){var b=add("Subtraction","Subtraction",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\*\s*(\w+)$/);if(m){var b=add("Multiplication","Multiplication",ESC+"Number1"+tv("2",m[2],"")+ESC+"Number2"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*(\w+)\s*\.\.\s*(\w+)$/);if(m){var b=add("Concatenate","Concatenate",ESC+"FirstString"+tv("2",m[2],"")+ESC+"SecondString"+tv("2",m[3],""),ESC+"Result"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       /* SetObjectProperty — order: Value, Property, Object */
-      m=L.match(/^([\w.]+)\.((\w+))\s*=\s*([\w.]+)\.((\w+))\s*([+\-\*])\s*(-?[\d.]+)$/);if(m&&m[1]===m[4]&&m[2]===m[5]){var op=m[7],nval=m[8],propN=m[2],objN=m[1];var opType=op==="+"?"Addition":op==="-"?"Subtraction":"Multiplication";var tmpV="_tmp"+propN;var bGet=add("GetObjectProperty","Get Object Property",ESC+"Object"+ESC+"0"+ESC+esc(objN)+ESC+"Property"+ESC+"0"+ESC+esc(propN),ESC+"Value"+ESC+esc(tmpV));if(bGet)out.push(bGet);var bOp=add(opType,opType,ESC+"Value 1"+tv("2",tmpV,"")+ESC+"Value 2"+tv("1",hexN(nval),"Number"),ESC+"Result"+ESC+esc(tmpV+"R"));if(bOp)out.push(bOp);var bSet=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",tmpV+"R","")+ESC+"Property"+ESC+"0"+ESC+esc(propN)+ESC+"Object"+ESC+"0"+ESC+esc(objN),"");if(bSet)out.push(bSet);continue;}
+      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*([^=]+?\.\.[^=]+)$/);if(m){var ccv="_cs"+(blocks.length+1);var cr2=concatChain(m[3],out,ccv);if(cr2!==null){var bsx=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",ccv,"")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(bsx)out.push(bsx);continue;}}
+      m=L.match(/^(?:local\s+)?(\w+)\s*=\s*([^=]+?\.\.[^=]+)$/);if(m){var lcv="_lv"+(blocks.length+1);var cr3=concatChain(m[2],out,lcv);if(cr3!==null){var bvv=add("SetVariable1","Set "+m[1],ESC+"Value"+tv("2",lcv,"")+ESC+"VariableName"+ESC+esc(m[1]),"");if(bvv)out.push(bvv);continue;}}
+      m=L.match(/^([\w.]+)\.((\w+))\s*=\s*([\w.]+)\.((\w+))\s*([+\-\*])\s*(-?[\d.]+|[A-Za-z_]\w*)$/);if(m&&m[1]===m[4]&&m[2]===m[5]){var op=m[7],nval=m[8],propN=m[2],objN=m[1];var opType=op==="+"?"Addition":op==="-"?"Subtraction":"Multiplication";var tmpV="_tmp"+propN;var bGet=add("GetObjectProperty","Get Object Property",ESC+"Object"+ESC+"0"+ESC+esc(objN)+ESC+"Property"+ESC+"0"+ESC+esc(propN),ESC+"Value"+ESC+esc(tmpV));if(bGet)out.push(bGet);var bOp=add(opType,opType,ESC+"Value 1"+tv("2",tmpV,"")+ESC+"Value 2"+(/^-?[\d.]+$/.test(nval)?tv("1",hexN(nval),"Number"):tv("2",nval,"")),ESC+"Result"+ESC+esc(tmpV+"R"));if(bOp)out.push(bOp);var bSet=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",tmpV+"R","")+ESC+"Property"+ESC+"0"+ESC+esc(propN)+ESC+"Object"+ESC+"0"+ESC+esc(objN),"");if(bSet)out.push(bSet);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*nil$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","","Nil")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(-?[\d.]+)$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",hexN(m[3]),"Number")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*["']([^"']*)["']$/);if(m){var _isBC=m[2]==="BrickColor";var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1",m[3],_isBC?"BrickColor":"String")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
@@ -4398,6 +4436,11 @@ function buildFromLua(lua){
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*false$/);if(m){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("1","0","Bool")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       m=L.match(/^([\w.]+)\.(\w+)\s*=\s*(\w+)$/);if(m&&m[3]!=="nil"&&m[3]!=="true"&&m[3]!=="false"){var b=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",m[3],"")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
       /* GetObjectProperty */
+      m=L.match(/^local\s+(\w+)\s*=\s*(\w+)((?::\s*WaitForChild\s*\(\s*["'][^"']*["']\s*\))+)$/);if(m){var seqW=[];var reW=/:\s*WaitForChild\s*\(\s*["']([^"']*)["']\s*\)/g;var wm;while((wm=reW.exec(m[3])))seqW.push(wm[1]);var curO=m[2];for(var wi=0;wi<seqW.length;wi++){var twn=(wi===seqW.length-1)?m[1]:"_wc"+(blocks.length+1)+"_"+wi;var bw2=add("WaitForChild","Wait For Child",ESC+"Instance"+ESC+"0"+ESC+esc(curO)+argsStr(parseArgs('"'+seqW[wi]+'"'),"TUPLEPARAM_Parameters"),ESC+"Result"+ESC+esc(twn));if(bw2)out.push(bw2);curO=twn;}continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*\{\s*\}$/);if(m){var bct=add("CreateTable","Create Table","",ESC+"TableVariable"+ESC+esc(m[1]));if(bct)out.push(bct);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*\{([^{}]*)\}$/);if(m){var bct2=add("CreateTable","Create Table","",ESC+"TableVariable"+ESC+esc(m[1]));if(bct2)out.push(bct2);var items=m[2].split(",");for(var ti=0;ti<items.length;ti++){var it=items[ti].trim();if(!it)continue;var kv=it.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/);if(kv){var bk=add("SetTableValue","Set Table Value",ESC+"Value"+tokV(kv[2])+ESC+"Key"+tv("1",kv[1],"String")+ESC+"Table"+ESC+"0"+ESC+esc(m[1]),"");if(bk)out.push(bk);}else{var bk2=add("SetTableValue","Set Table Value",ESC+"Value"+tokV(it)+ESC+"Key"+tv("1",hexN(ti+1),"Number")+ESC+"Table"+ESC+"0"+ESC+esc(m[1]),"");if(bk2)out.push(bk2);}}continue;}
+      m=L.match(/^([\w.]+)\.(\w+)\s*=\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)$/);if(m){var rpv=resolvePath(m[3],out);var brp=add("SetObjectProperty","Set Object Property",ESC+"Value"+tv("2",rpv,"")+ESC+"Property"+ESC+"0"+ESC+esc(m[2])+ESC+"Object"+ESC+"0"+ESC+esc(m[1]),"");if(brp)out.push(brp);continue;}
+      m=L.match(/^local\s+(\w+)\s*=\s*([A-Za-z_]\w*\.[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)$/);if(m){var rp2=resolvePath(m[2],out);var bl2=add("SetVariable1","Bind "+m[1],ESC+"Value"+tv("2",rp2,"")+ESC+"VariableName"+ESC+esc(m[1]),"");if(bl2)out.push(bl2);continue;}
       m=L.match(/^local\s+(\w+)\s*=\s*([\w.]+)\.(\w+)$/);if(m&&m[2]!=="Object"&&!(m[2]==="Instance"&&m[3]==="new")){var b=add("GetObjectProperty","Get Object Property",ESC+"Object"+ESC+"0"+ESC+esc(m[2])+ESC+"Property"+ESC+"0"+ESC+esc(m[3]),ESC+"Value"+ESC+esc(m[1]));if(b)out.push(b);continue;}
       /* Table get/set */
       m=L.match(/^(\w+)\[["']([^"']+)["']\]\s*=\s*(.+)$/);if(m){var a=parseArgs(m[3])[0]||{t:"2",v:m[3],tn:""};var b=add("SetTableValue","Set Table Value",ESC+"Value"+tv(a.t,a.v,a.tn)+ESC+"Key"+tv("1",m[2],"String")+ESC+"Table"+ESC+"0"+ESC+esc(m[1]),"");if(b)out.push(b);continue;}
@@ -4474,6 +4517,8 @@ function buildFromLua(lua){
     top.push.apply(top,bb);
   }
   var top=[],i=0;
+  function parseAll(){
+  var res=[];top=res;
   while(i<lines.length){var l=lines[i],m;
     var _fxt=fxPattern(l);
     if(_fxt){for(var _q=0;_q<_fxt.length;_q++)top.push(_fxt[_q]);i++;continue;}
@@ -4559,6 +4604,9 @@ m=l.match(/^repeat$/);if(m){var r=grabBody(i+1);i=r.next;var bb=single(r.body);v
     
     var one=single([l]);if(one.length)top.push.apply(top,one);i++;
   }
+  return res;
+  }
+  parseAll();
   if(!blocks.length){return{cf:editor()+blk("Print","Print1",hexPos(0,0),null,ESC+"Text"+ESC+"0"+ESC+"Hello",""),blocks:1,warns:warns};}
   /* === IMPROVED BLOCK LINKING === */
   var nm={};for(var j=0;j<blocks.length;j++)nm[blocks[j].name]=blocks[j];
@@ -4791,7 +4839,7 @@ window.__RSX_reencode__=reencodeLastAI;
         var cl=resp.clone();
         cl.json().then(function(d){
           if(d&&typeof d.content==="string"&&d.content){
-            setTimeout(function(){try{reencodeLastAI(d.content);}catch(e){}},6000);
+            setTimeout(function(){try{reencodeLastAI(d.content);}catch(e){}},1200);
           }
         }).catch(function(){});
       }catch(e){}
@@ -4801,7 +4849,6 @@ window.__RSX_reencode__=reencodeLastAI;
 })();
 
 })();
-
 /* ==== AUTO MODE FIX: <2 BYOK keys -> fall back to Retrox owner-keyed path ==== */
 (function(){
   var lastHit=0;
