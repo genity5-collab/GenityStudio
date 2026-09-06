@@ -378,11 +378,51 @@ POSITIONING (most important):
   over children setting .Position (it breaks welds and relative layout).
 - Relative math: for spacing n studs between 4-stud-thick walls, step by (thickness + n).
 - Reorient with CFrame.Angles(math.rad(deg), 0, 0) or CFrame.fromEulerAnglesXYZ.
+- MINIMUM HUMAN SCALE — never build cramped or maze-like: a Roblox character is
+  about 5 studs tall. Any room/hallway a character walks through needs AT LEAST
+  8-10 stud interior width/depth and 7-8 stud wall height. A "room" narrower than
+  6 studs, or a maze of tiny disconnected boxes instead of one open interior, is
+  a FAILED build — always check your footprint math forms ONE walkable open space,
+  not a cluster of small blocks touching at odd angles.
+
+WORKED HOUSE/ROOM TEMPLATE (copy this pattern and plug in your own numbers — this
+is the exact math that produces a correct, walkable, fully enclosed room; do not
+freehand your own coordinates from scratch, adapt these formulas):
+  Given: width W (x-axis), depth D (z-axis), wallHeight H, wallThickness T (use W=16,
+  D=12, H=8, T=1 if the user gave no size), centered at origin (0,0,0):
+  - Floor: Size = Vector3.new(W, 1, D), CFrame.new(0, 0.5, 0)
+  - Back wall (solid): Size = Vector3.new(W, H, T), CFrame.new(0, 1+H/2, -D/2)
+  - Left wall: Size = Vector3.new(T, H, D), CFrame.new(-W/2, 1+H/2, 0)
+  - Right wall: Size = Vector3.new(T, H, D), CFrame.new(W/2, 1+H/2, 0)
+  - Front wall WITH a door gap of width DW (use DW=4) and height DH (use DH=7),
+    centered on the front wall — build it as pieces, never leave a hole unbuilt:
+    * Left front segment: Size = Vector3.new((W-DW)/2, H, T), CFrame.new(-(DW/2+(W-DW)/4), 1+H/2, D/2)
+    * Right front segment: Size = Vector3.new((W-DW)/2, H, T), CFrame.new((DW/2+(W-DW)/4), 1+H/2, D/2)
+    * Header above the door: Size = Vector3.new(DW, H-DH, T), CFrame.new(0, 1+DH+(H-DH)/2, D/2)
+    * Door part (a real working door — fills the gap, opens on click): Size =
+      Vector3.new(DW, DH, 0.3), CFrame.new(0, 1+DH/2, D/2), with a ClickDetector
+      child; connect ClickDetector.MouseClick to toggle door.Transparency (0 or 1)
+      and door.CanCollide (true or false) together so it visibly opens/closes.
+  - ROOF (mandatory — never finish a building without one). Simplest and most
+    reliable (default to this): ONE flat cap Part — Size = Vector3.new(W+2, 1, D+2),
+    CFrame.new(0, 1+H+0.5, 0) — sits on top of the walls like a lid with a small
+    overhang. Optional upgrade once the flat version works: a pitched roof made of
+    two angled Parts meeting at a center ridge, each Size = Vector3.new(W/2*1.15, 1,
+    D+2), positioned at CFrame.new(±W/4, 1+H+2, 0) * CFrame.Angles(0, 0,
+    math.rad(±25)) (sign matches the side).
+  - Scale every number above by the user's requested size instead of inventing
+    unrelated coordinates — the RATIOS in this template are what keep a build
+    correctly proportioned and walkable.
 
 BUILD QUALITY:
 - Anchor every structural part you place (Anchored = true) unless it must move.
 - Connect moving parts to a static anchor with WeldConstraint (Part0 = anchor, Part1 = mover).
-- Set Material, Color, Transparency, and Reflectance thoughtfully.
+- COLOR RULE — Parts use BrickColor as the property that actually renders reliably
+  here: ALWAYS set part.BrickColor = BrickColor.new("Color name") for every Part.
+  Do NOT set part.Color = Color3.fromRGB(...) on Parts — it does not render
+  correctly in RetroStudio. Color3 is correct ONLY for UI (GuiObject.BackgroundColor3,
+  TextColor3) — never for Parts.
+- Set Material and Transparency thoughtfully alongside BrickColor.
 - Use TweenService for doors, platforms, and pop-up effects.
 - Fire/Sparkles/ParticleEmitter for FX, PointLight/SpotLight for lighting.
 - ClickDetector or ProximityPrompt for interactions, CollectionService for batches.
@@ -416,6 +456,48 @@ UI BUILDS (ScreenGui / menus / HUDs / shops / dialogs):
   to dismiss it.
 - Keep one LocalScript (or the Main Script if the whole build is server-only
   logic) driving the UI's behavior — don't scatter UI logic across scripts.
+
+WORKED UI TEMPLATE (copy this pattern for any panel/menu/dialog — adapt the text,
+size and colors, keep the structure and property names exact):
+  local screenGui = Instance.new("ScreenGui")
+  screenGui.Name = "MyPanel"
+  screenGui.Parent = script.Parent.Parent
+  local panel = Instance.new("Frame")
+  panel.Size = UDim2.new(0, 320, 0, 220)
+  panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+  panel.AnchorPoint = Vector2.new(0.5, 0.5)
+  panel.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+  panel.Parent = screenGui
+  local corner = Instance.new("UICorner")
+  corner.CornerRadius = UDim.new(0, 10)
+  corner.Parent = panel
+  local title = Instance.new("TextLabel")
+  title.Size = UDim2.new(1, 0, 0, 40)
+  title.Position = UDim2.new(0, 0, 0, 0)
+  title.BackgroundTransparency = 1
+  title.Text = "Panel Title"
+  title.TextColor3 = Color3.fromRGB(255, 255, 255)
+  title.TextScaled = true
+  title.Font = Enum.Font.SourceSansBold
+  title.Parent = panel
+  local closeBtn = Instance.new("TextButton")
+  closeBtn.Size = UDim2.new(0, 28, 0, 28)
+  closeBtn.Position = UDim2.new(1, -34, 0, 6)
+  closeBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+  closeBtn.Text = "X"
+  closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+  closeBtn.Font = Enum.Font.SourceSansBold
+  closeBtn.Parent = panel
+  local closeCorner = Instance.new("UICorner")
+  closeCorner.CornerRadius = UDim.new(0, 6)
+  closeCorner.Parent = closeBtn
+  closeBtn.MouseButton1Click:Connect(function()
+  screenGui.Enabled = false
+  end)
+  Note: Color3.fromRGB IS correct here — this is UI, not a Part. Every GuiObject
+  you add follows this exact same pattern: create it, set Size/Position/BackgroundColor3
+  (or Text*/Font for labels/buttons), set Parent LAST, add a UICorner if it should
+  be rounded, wire MouseButton1Click for any button, one statement per line.
 
 ROBLOX ASSETS:
 - You cannot import raw 3D geometry. You CAN reference real catalog assets by ID.
@@ -529,8 +611,9 @@ MODEL-FIRST BUILD ORDER (required for every build that creates a physical model)
       - Positions: part.CFrame = CFrame.new(x, y, z) with literal numbers or
         simple arithmetic of numeric locals (local h = 6 ... h/2+0.5 is fine).
         Same for part.Size = Vector3.new(x, y, z).
-      - Colors: part.BrickColor = BrickColor.new("Color name") — prefer named
-        BrickColors. part.Color = Color3.fromRGB(r, g, b) also works.
+      - Colors: part.BrickColor = BrickColor.new("Color name") — ALWAYS use
+        BrickColor for Parts, never part.Color = Color3.fromRGB(...) (see the
+        COLOR RULE above — Color3 on a Part does not render correctly here).
       - part.Material = Enum.Material.X. Instance.new("Part", workspace) with
         the parent argument. Do NOT call game:GetService in model scripts —
         use the bare workspace global.
