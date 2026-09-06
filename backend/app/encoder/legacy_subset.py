@@ -8,6 +8,7 @@ not a signal that the public encoder may be activated.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -137,6 +138,14 @@ class LegacySubsetCompiler:
         numeric_loop_steps: dict[str, tuple[str, str]] = {}
         unsupported_named_function_lines: list[str] | None = None
         unsupported_named_function_depth = 0
+        # Numeric locals seen so far (local x = <number-or-foldable-expr>),
+        # used to resolve variables/arithmetic inside CFrame.new/Vector3.new/
+        # UDim2.new/Color3.* property assignments that would otherwise only
+        # accept hardcoded literals.
+        known_numbers: dict[str, str] = {}
+
+        def fold(expression: str) -> str | None:
+            return self._fold_number(expression, known_numbers)
 
         def add(type_name: str, label: str, inputs: str = "", outputs: str = "") -> LegacyBlock:
             counters[label] = counters.get(label, 0) + 1
@@ -202,17 +211,20 @@ class LegacySubsetCompiler:
                 unsupported_named_function_depth = 1
                 continue
             numeric_for = re.fullmatch(r"for\s+(\w+)\s*=\s*([^,]+)\s*,\s*([^,\s]+)(?:\s*,\s*([^\s]+))?\s+do", line)
-            if numeric_for and all(self._is_number(value) for value in numeric_for.groups()[1:3]):
-                variable, start, finish, step = numeric_for.groups()
-                add("SetVariable1", f"Init {variable}", ESC + "Value" + _typed_value(start), ESC + "VariableName" + ESC + variable)
-                loop = add(
-                    "WhileLoop3",
-                    "While Loop",
-                    ESC + "Value 1" + _typed_value(variable) + ESC + "Value 2" + _typed_value(finish) + ESC + "ComparisonType" + ESC + "0" + ESC + "<=",
-                )
-                numeric_loop_steps[loop.name] = (variable, step or "1")
-                open_control_blocks.append(loop)
-                continue
+            if numeric_for:
+                variable, start_raw, finish_raw, step_raw = numeric_for.groups()
+                start, finish = fold(start_raw), fold(finish_raw)
+                step = fold(step_raw) if step_raw else "1"
+                if start is not None and finish is not None and step is not None:
+                    add("SetVariable1", f"Init {variable}", ESC + "Value" + _typed_value(start), ESC + "VariableName" + ESC + variable)
+                    loop = add(
+                        "WhileLoop3",
+                        "While Loop",
+                        ESC + "Value 1" + _typed_value(variable) + ESC + "Value 2" + _typed_value(finish) + ESC + "ComparisonType" + ESC + "0" + ESC + "<=",
+                    )
+                    numeric_loop_steps[loop.name] = (variable, step)
+                    open_control_blocks.append(loop)
+                    continue
             condition = re.fullmatch(r"if\s+(.+)\s+then", line)
             if condition:
                 open_control_blocks.append(add("If", "If", self._condition_inputs(condition.group(1))))
@@ -276,10 +288,12 @@ class LegacySubsetCompiler:
                 r"local\s+(\w+)\s*=\s*Color3ToBrickColor\s*\(\s*Color3\.fromRGB\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*\)",
                 line,
             )
-            if match and all(self._is_number(value) for value in match.groups()[1:]):
-                color = ",".join(self._rgb_component(value) for value in match.groups()[1:])
-                add("Color3ToBrickColor", "Color3 to BrickColor", ESC + "Color3" + ESC + "0" + ESC + color, ESC + "BrickColor" + ESC + match.group(1))
-                continue
+            if match:
+                folded_components = [fold(value) for value in match.groups()[1:]]
+                if None not in folded_components:
+                    color = ",".join(self._rgb_component(value) for value in folded_components)
+                    add("Color3ToBrickColor", "Color3 to BrickColor", ESC + "Color3" + ESC + "0" + ESC + color, ESC + "BrickColor" + ESC + match.group(1))
+                    continue
             match = re.fullmatch(r"local\s+(\w+)\s*=\s*Vector3\.new\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
             if match:
                 x, y, z = (_typed_value(value) for value in match.groups()[1:])
@@ -313,9 +327,18 @@ class LegacySubsetCompiler:
                 )
                 continue
             match = re.fullmatch(r"local\s+(\w+)\s*=\s*(.+)", line)
-            if match and self._is_simple_value(match.group(2)):
-                add("SetVariable1", "Set Variable", ESC + "Value" + _typed_value(match.group(2)), ESC + "VariableName" + ESC + match.group(1))
-                continue
+            if match:
+                var_name, raw_value = match.groups()
+                if self._is_simple_value(raw_value):
+                    add("SetVariable1", "Set Variable", ESC + "Value" + _typed_value(raw_value), ESC + "VariableName" + ESC + var_name)
+                    if self._is_number(raw_value.strip()):
+                        known_numbers[var_name] = raw_value.strip().replace("_", "")
+                    continue
+                folded = fold(raw_value)
+                if folded is not None:
+                    add("SetVariable1", "Set Variable", ESC + "Value" + _typed_value(folded), ESC + "VariableName" + ESC + var_name)
+                    known_numbers[var_name] = folded
+                    continue
             match = re.fullmatch(r"([\w.]+)\.(Size|Position)\s*=\s*UDim2\.new\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
             if match and all(self._is_number(value) for value in match.groups()[2:]):
                 object_name, property_name, x_scale, x_offset, y_scale, y_offset = match.groups()
@@ -332,67 +355,75 @@ class LegacySubsetCompiler:
                 )
                 continue
             match = re.fullmatch(r"([\w.]+)\.(BackgroundColor3|TextColor3|ImageColor3)\s*=\s*Color3\.fromRGB\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
-            if match and all(self._is_number(value) for value in match.groups()[2:]):
-                object_name, property_name, red, green, blue = match.groups()
-                components = [self._legacy_color_component(value) for value in (red, green, blue)]
-                add(
-                    "ConstructColor3",
-                    "Construct Color3",
-                    ESC + "R" + ESC + "1" + ESC + components[0] + ESC + "Number" + ESC + "G" + ESC + "1" + ESC + components[1] + ESC + "Number" + ESC + "B" + ESC + "1" + ESC + components[2] + ESC + "Number",
-                    ESC + "Color3" + ESC + "_color0",
-                )
-                add(
-                    "SetObjectProperty",
-                    "Set Object Property",
-                    ESC + "Value" + ESC + "2" + ESC + "_color0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
-                )
-                continue
+            if match:
+                object_name, property_name, r_raw, g_raw, b_raw = match.groups()
+                red, green, blue = fold(r_raw), fold(g_raw), fold(b_raw)
+                if None not in (red, green, blue):
+                    components = [self._legacy_color_component(value) for value in (red, green, blue)]
+                    add(
+                        "ConstructColor3",
+                        "Construct Color3",
+                        ESC + "R" + ESC + "1" + ESC + components[0] + ESC + "Number" + ESC + "G" + ESC + "1" + ESC + components[1] + ESC + "Number" + ESC + "B" + ESC + "1" + ESC + components[2] + ESC + "Number",
+                        ESC + "Color3" + ESC + "_color0",
+                    )
+                    add(
+                        "SetObjectProperty",
+                        "Set Object Property",
+                        ESC + "Value" + ESC + "2" + ESC + "_color0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
+                    )
+                    continue
             match = re.fullmatch(r"([\w.]+)\.(BackgroundColor3|TextColor3|ImageColor3)\s*=\s*Color3\.new\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
-            if match and all(self._is_number(value) for value in match.groups()[2:]):
-                object_name, property_name, red, green, blue = match.groups()
-                components = [_hex_number(value) for value in (red, green, blue)]
-                add(
-                    "ConstructColor3",
-                    "Construct Color3",
-                    ESC + "R" + ESC + "1" + ESC + components[0] + ESC + "Number" + ESC + "G" + ESC + "1" + ESC + components[1] + ESC + "Number" + ESC + "B" + ESC + "1" + ESC + components[2] + ESC + "Number",
-                    ESC + "Color3" + ESC + "_color0",
-                )
-                add(
-                    "SetObjectProperty",
-                    "Set Object Property",
-                    ESC + "Value" + ESC + "2" + ESC + "_color0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
-                )
-                continue
+            if match:
+                object_name, property_name, r_raw, g_raw, b_raw = match.groups()
+                red, green, blue = fold(r_raw), fold(g_raw), fold(b_raw)
+                if None not in (red, green, blue):
+                    components = [_hex_number(value) for value in (red, green, blue)]
+                    add(
+                        "ConstructColor3",
+                        "Construct Color3",
+                        ESC + "R" + ESC + "1" + ESC + components[0] + ESC + "Number" + ESC + "G" + ESC + "1" + ESC + components[1] + ESC + "Number" + ESC + "B" + ESC + "1" + ESC + components[2] + ESC + "Number",
+                        ESC + "Color3" + ESC + "_color0",
+                    )
+                    add(
+                        "SetObjectProperty",
+                        "Set Object Property",
+                        ESC + "Value" + ESC + "2" + ESC + "_color0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
+                    )
+                    continue
             match = re.fullmatch(r"([\w.]+)\.CFrame\s*=\s*CFrame\.new\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
-            if match and all(self._is_number(value) for value in match.groups()[1:]):
-                object_name, x, y, z = match.groups()
-                add(
-                    "ConstructCFrame",
-                    "CFrame",
-                    ESC + "Rotation" + ESC + "0" + ESC + "0,0,0" + ESC + "Position" + ESC + "0" + ESC + ",".join(value.strip() for value in (x, y, z)),
-                    ESC + "CFrame" + ESC + "_cframe0",
-                )
-                add(
-                    "SetObjectProperty",
-                    "Set Object Property",
-                    ESC + "Value" + ESC + "2" + ESC + "_cframe0" + ESC + "Property" + ESC + "0" + ESC + "CFrame" + ESC + "Object" + ESC + "0" + ESC + object_name,
-                )
-                continue
+            if match:
+                object_name, x_raw, y_raw, z_raw = match.groups()
+                x, y, z = fold(x_raw), fold(y_raw), fold(z_raw)
+                if None not in (x, y, z):
+                    add(
+                        "ConstructCFrame",
+                        "CFrame",
+                        ESC + "Rotation" + ESC + "0" + ESC + "0,0,0" + ESC + "Position" + ESC + "0" + ESC + ",".join((x, y, z)),
+                        ESC + "CFrame" + ESC + "_cframe0",
+                    )
+                    add(
+                        "SetObjectProperty",
+                        "Set Object Property",
+                        ESC + "Value" + ESC + "2" + ESC + "_cframe0" + ESC + "Property" + ESC + "0" + ESC + "CFrame" + ESC + "Object" + ESC + "0" + ESC + object_name,
+                    )
+                    continue
             match = re.fullmatch(r"([\w.]+)\.(\w+)\s*=\s*Vector3\.new\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)", line)
-            if match and all(self._is_number(value) for value in match.groups()[2:]):
-                object_name, property_name, x, y, z = match.groups()
-                add(
-                    "ConstructVector3",
-                    "Vector3",
-                    ESC + "X" + _typed_value(x) + ESC + "Y" + _typed_value(y) + ESC + "Z" + _typed_value(z),
-                    ESC + "Vector3" + ESC + "_vector0",
-                )
-                add(
-                    "SetObjectProperty",
-                    "Set Object Property",
-                    ESC + "Value" + ESC + "2" + ESC + "_vector0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
-                )
-                continue
+            if match:
+                object_name, property_name, x_raw, y_raw, z_raw = match.groups()
+                x, y, z = fold(x_raw), fold(y_raw), fold(z_raw)
+                if None not in (x, y, z):
+                    add(
+                        "ConstructVector3",
+                        "Vector3",
+                        ESC + "X" + _typed_value(x) + ESC + "Y" + _typed_value(y) + ESC + "Z" + _typed_value(z),
+                        ESC + "Vector3" + ESC + "_vector0",
+                    )
+                    add(
+                        "SetObjectProperty",
+                        "Set Object Property",
+                        ESC + "Value" + ESC + "2" + ESC + "_vector0" + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
+                    )
+                    continue
             match = re.fullmatch(r"([\w.]+)\.BrickColor\s*=\s*BrickColor\.new\s*\(\s*(['\"])(.*?)\2\s*\)", line)
             if match:
                 add(
@@ -410,27 +441,30 @@ class LegacySubsetCompiler:
                 )
                 continue
             match = re.fullmatch(r"([\w.]+)\.(\w+)\s*=\s*(.+)", line)
-            if match and self._is_simple_value(match.group(3)):
-                add(
-                    "SetObjectProperty",
-                    "Set Object Property",
-                    ESC
-                    + "Value"
-                    + _typed_value(match.group(3))
-                    + ESC
-                    + "Property"
-                    + ESC
-                    + "0"
-                    + ESC
-                    + match.group(2)
-                    + ESC
-                    + "Object"
-                    + ESC
-                    + "0"
-                    + ESC
-                    + match.group(1),
-                )
-                continue
+            if match:
+                object_name, property_name, raw_value = match.groups()
+                resolved_value = raw_value if self._is_simple_value(raw_value) else fold(raw_value)
+                if resolved_value is not None:
+                    add(
+                        "SetObjectProperty",
+                        "Set Object Property",
+                        ESC
+                        + "Value"
+                        + _typed_value(resolved_value)
+                        + ESC
+                        + "Property"
+                        + ESC
+                        + "0"
+                        + ESC
+                        + property_name
+                        + ESC
+                        + "Object"
+                        + ESC
+                        + "0"
+                        + ESC
+                        + object_name,
+                    )
+                    continue
             match = re.fullmatch(r"(\w+)\s*\[\s*(.+)\s*\]\s*=\s*(.+)", line)
             if match and self._is_simple_value(match.group(2)) and self._is_simple_value(match.group(3)):
                 add(
@@ -517,6 +551,15 @@ class LegacySubsetCompiler:
         normalized = re.sub(r"^\s*--![^\n]*$", "", normalized, flags=re.MULTILINE)
         normalized = re.sub(r"\bconst\s+(\w+)(?:\s*:\s*[^=\n]+)?\s*=", r"local \1 =", normalized)
         normalized = re.sub(r"\blocal\s+(\w+)\s*:\s*[^=\n]+\s*=", r"local \1 =", normalized)
+        # RetroStudio's legacy runtime exposes services as bare globals
+        # (Workspace, Lighting, Players, ...) with no GetService call needed.
+        # Rewrite modern-style service lookups to the bare name so later
+        # patterns (which only understand simple identifiers) still match.
+        normalized = re.sub(r"game\s*:\s*GetService\s*\(\s*['\"](\w+)['\"]\s*\)", r"\1", normalized)
+        normalized = re.sub(r"\bgame\.(\w+)\b", r"\1", normalized)
+        # Drop now-redundant self-assignments created by the substitution above
+        # (e.g. "local Workspace = game:GetService(\"Workspace\")" -> "local Workspace = Workspace").
+        normalized = re.sub(r"^\s*local\s+(\w+)\s*=\s*\1\s*$", "", normalized, flags=re.MULTILINE)
         return normalized
 
     @staticmethod
@@ -530,6 +573,46 @@ class LegacySubsetCompiler:
     @staticmethod
     def _is_number(value: str) -> bool:
         return bool(re.fullmatch(r"-?(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?)", value.strip()))
+
+    @staticmethod
+    def _fold_number(expression: str, known_numbers: dict[str, str]) -> str | None:
+        """Resolve a compile-time-constant numeric expression to a literal.
+
+        Handles bare literals, known local numeric variables (from
+        ``local x = <number>``), and safe arithmetic (+ - * / and parens)
+        over those two. Never executes arbitrary code: after substituting
+        known variable names, the remaining text must consist solely of
+        digits/operators/parens, and the parsed AST is restricted to
+        numeric constants and +-*/ operators before it is evaluated.
+        """
+        text = expression.strip()
+        if LegacySubsetCompiler._is_number(text):
+            return text.replace("_", "")
+        substituted = re.sub(r"[A-Za-z_]\w*", lambda m: known_numbers.get(m.group(0), m.group(0)), text)
+        if not re.fullmatch(r"[0-9+\-*/(). ]+", substituted):
+            return None
+        try:
+            tree = ast.parse(substituted, mode="eval")
+        except SyntaxError:
+            return None
+        allowed_nodes = (
+            ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+            ast.Add, ast.Sub, ast.Mult, ast.Div, ast.USub, ast.UAdd,
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                return None
+            if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+                return None
+        try:
+            value = eval(compile(tree, "<fold>", "eval"))  # noqa: S307 - AST is pre-restricted to numeric arithmetic above
+        except Exception:
+            return None
+        if isinstance(value, bool):
+            return None
+        if float(value).is_integer():
+            return str(int(value))
+        return repr(float(value))
 
     @staticmethod
     def _rgb_component(value: str) -> str:
