@@ -4794,5 +4794,36 @@ function reencodeLastAI(content){
 })();
 
 </script>
+
+<script>
+
+/* ==== AUTO MODE FIX: <2 BYOK keys -> fall back to Retrox owner-keyed path ==== */
+(function(){
+  var lastHit=0;
+  function fixAutoGate(){
+    var st=document.getElementById("aiSt");
+    if(!st)return;
+    var t=String(st.textContent||"");
+    if(t.indexOf("Auto mode needs at least 2 API keys")<0)return;
+    if(Date.now()-lastHit<15000)return;
+    lastHit=Date.now();
+    st.textContent="Auto needs 2+ provider keys - switching to Retrox (owner keys)...";
+    var log=document.getElementById("aiLog");
+    if(log){var d=document.createElement("div");d.textContent="Auto needs 2+ provider keys - using Retrox owner keys instead (Normal mode)";d.style.cssText="color:#7ee2a8;font-size:.7rem";log.appendChild(d);log.scrollTop=log.scrollHeight;}
+    var btns=document.querySelectorAll('[data-mode]');
+    var plan=null;
+    for(var i=0;i<btns.length;i++){if(btns[i].getAttribute("data-mode")==="plan"){plan=btns[i];break;}}
+    if(!plan)return;
+    plan.click();
+    setTimeout(function(){
+      var send=document.getElementById("aiSend");
+      var inEl=document.getElementById("aiIn");
+      if(send&&inEl&&String(inEl.value||"").trim()){send.click();}
+    },400);
+  }
+  setInterval(fixAutoGate,900);
+})();
+
+</script>
 </body>
 </html>
