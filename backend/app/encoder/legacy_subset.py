@@ -449,6 +449,22 @@ class LegacySubsetCompiler:
                     ESC + "Value" + _typed_value(f'"{match.group(2)}"') + ESC + "Property" + ESC + "0" + ESC + "Material" + ESC + "Object" + ESC + "0" + ESC + match.group(1),
                 )
                 continue
+            # GENERAL Enum property fix: any "obj.Prop = Enum.Anything.Member" must
+            # encode as the STRING member name, never as a variable reference.
+            # Without this, MeshType/HorizontalAlignment/CameraType/etc. silently
+            # fail at runtime (the runtime looks up a variable literally named
+            # "Enum.MeshType.FileMesh", finds nothing, and the property never
+            # gets set) — this was the root cause of meshes rendering as plain
+            # default parts instead of the requested shape.
+            match = re.fullmatch(r"([\w.]+)\.(\w+)\s*=\s*Enum\.(\w+)\.(\w+)", line)
+            if match:
+                object_name, property_name, _enum_type, member = match.groups()
+                add(
+                    "SetObjectProperty",
+                    "Set Object Property",
+                    ESC + "Value" + _typed_value(f'"{member}"') + ESC + "Property" + ESC + "0" + ESC + property_name + ESC + "Object" + ESC + "0" + ESC + object_name,
+                )
+                continue
             match = re.fullmatch(r"([\w.]+)\.(\w+)\s*=\s*(.+)", line)
             if match:
                 object_name, property_name, raw_value = match.groups()

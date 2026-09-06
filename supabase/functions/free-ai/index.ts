@@ -568,6 +568,12 @@ Deno.serve(async (request) => {
   }
   if (openrouterKey) {
     PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b" });
+    // Deeper last-resort free models: only reached when everything above failed
+    // (e.g. Groq rate-limited AND primary OpenRouter model down). :free variants
+    // have tight OpenRouter rate limits but cost nothing.
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "meta-llama/llama-3.3-70b-instruct:free" });
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "qwen/qwen-2.5-72b-instruct:free" });
+    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "deepseek/deepseek-chat-v3-0324:free" });
   }
   if (!supabaseUrl || !supabaseAnonKey || PROVIDERS.length === 0) {
     return json(request, { error: "Free AI is temporarily unavailable" }, 503);
@@ -671,6 +677,7 @@ Deno.serve(async (request) => {
   ];
 
   const searches: SearchRecord[] = [];
+  const providerErrors: string[] = [];
 
   // ── SSE plumbing (live search events) ───────────────────────────────────
   const encoder = new TextEncoder();
@@ -875,6 +882,7 @@ Deno.serve(async (request) => {
         const res = await plainCompletion(provider, conversation, reasoningEffort, true, toolChoice);
         if (res.message) { message = res.message; usedModel = `${provider.model} (${provider.name})`; break; }
         lastError = res.error || lastError;
+        providerErrors.push(`${provider.name}/${provider.model}: ${res.error || "no message"}`);
       }
       if (!message) {
         const errPayload = { error: "Free AI provider is unavailable; " + tokensCharged + " token(s) were used", status: 502 };
@@ -913,6 +921,7 @@ Deno.serve(async (request) => {
         for (const provider of PROVIDERS) {
           const res = await plainCompletion(provider, conversation, reasoningEffort, true);
           if (res.message) { retryMessage = res.message; usedModel = `${provider.model} (${provider.name})`; break; }
+          providerErrors.push(`${provider.name}/${provider.model}: ${res.error || "no message"}`);
         }
         const retryToolCalls = Array.isArray(retryMessage?.tool_calls) ? retryMessage.tool_calls : [];
         if (retryToolCalls.length > 0) {
@@ -939,7 +948,7 @@ Deno.serve(async (request) => {
         streamFailed = false;
         break;
       }
-      if (res.error) continue;
+      if (res.error) { providerErrors.push(`${provider.name}/${provider.model}: ${res.error}`); continue; }
     }
     if (streamFailed) {
       // Streaming unavailable on every provider: last-chance plain completion.
@@ -950,6 +959,7 @@ Deno.serve(async (request) => {
           usedModel = `${provider.model} (${provider.name})`;
           break;
         }
+        providerErrors.push(`${provider.name}/${provider.model}: ${res.error || "no content"}`);
       }
     }
     break;
@@ -969,7 +979,8 @@ Deno.serve(async (request) => {
   }
 
   if (!finalContent) {
-    const errPayload = { error: "Free AI returned no usable response", status: 502 };
+    const detail = providerErrors.length ? ` (${providerErrors.slice(0, 3).join("; ")})` : "";
+    const errPayload = { error: "Free AI returned no usable response" + detail, status: 502 };
     if (streamController) {
       sse("error", errPayload);
       try { streamController.close(); } catch { /* already closed */ }
@@ -988,7 +999,7 @@ Deno.serve(async (request) => {
   content = content.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, "$1$2");
   content = content.replace(/^\s*-{3,}\s*$/gm, "");
   if (content.trim().length === 0) {
-    const errPayload = { error: "Free AI returned no usable response", status: 502 };
+    const errPayload = { error: "Free AI returned no usable response (empty after plain-text cleanup)", status: 502 };
     if (streamController) {
       sse("error", errPayload);
       try { streamController.close(); } catch { /* already closed */ }
