@@ -2771,17 +2771,16 @@ We found your existing local account. After login, your data will be migrated au
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-/* RetroStudio hardening: Retrox-only AI, 25-credit economy, generation animations */
-/* RetroStudio hardening patch — locked AIs, Retrox-only, new credits, animations.
+/* RetroStudio hardening patch v4 — Retrox-only AI, Galaxy Smartness slider,
+   Retrox Core working animation, real-event activity log, live edit streaming,
+   reference images, token truth, encoder fallback.
    Injected before the obfuscated app script. */
 (function () {
   "use strict";
 
   var LOCK_MSG = "These models are gonna be back soon. Use Retrox for now as its better";
 
-  /* ── 1. Lock every AI provider except Retrox (server + client side) ──────
-     Retrox runs server-side via Supabase free-ai; user-key providers are
-     permanently retired. Any attempt to reach them gets the lock message.   */
+  /* ── 1. Lock every AI provider except Retrox ───────────────────────────── */
   var BLOCKED_PROVIDER_RE = /api\.openai\.com|api\.x\.ai|api\.mistral\.ai|dashscope\.aliyuncs\.com|api\.moonshot\.cn|generativelanguage\.googleapis\.com|api\.anthropic\.com/;
   var _origFetch = window.fetch.bind(window);
   window.fetch = function (input, init) {
@@ -2808,7 +2807,6 @@ We found your existing local account. After login, your data will be migrated au
   }
 
   function lockUI() {
-    /* dim locked model pills + dropdown options; keep Retrox bright */
     var lockedProviders = ["gemini", "chatgpt", "claude", "grok", "qwen", "mistral", "kimi"];
 
     document.querySelectorAll(".model-pill").forEach(function (pill) {
@@ -2835,7 +2833,6 @@ We found your existing local account. After login, your data will be migrated au
       });
     }
 
-    /* clicking a locked pill -> message; Retrox pill unaffected */
     document.addEventListener("click", function (ev) {
       var pill = ev.target && ev.target.closest ? ev.target.closest(".model-pill") : null;
       if (pill) {
@@ -2848,7 +2845,6 @@ We found your existing local account. After login, your data will be migrated au
       }
     }, true);
 
-    /* hide the API-key input entirely: no user keys can ever be entered */
     var style = document.createElement("style");
     style.textContent =
       "#apiKey{display:none!important}#keyBtn{display:none!important}" +
@@ -2856,7 +2852,6 @@ We found your existing local account. After login, your data will be migrated au
       ".model-pill.retrox-locked::after{content:'🔒';font-size:.5rem;position:absolute;top:-2px;right:-2px}";
     document.head.appendChild(style);
 
-    /* strip any saved provider keys from localStorage (server + local) */
     try {
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
@@ -2877,205 +2872,77 @@ We found your existing local account. After login, your data will be migrated au
     } catch (e) {}
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", lockUI);
-  } else {
-    lockUI();
+  /* ── 2. Working UI: hide the app's transient radar panel.
+     The Retrox Core indicator + activity log replace it (section 4b). ──── */
+  var workStyle = document.createElement("style");
+  workStyle.textContent =
+    ".thinking-stage{display:none!important}" +
+    ".execution-card{display:none!important}" +
+    ".live-edit-log{display:none!important}" +
+    ".think-label{display:none!important}" +
+    "#coderAnim{display:none!important}" +
+    ".live-content{white-space:pre-wrap}";
+  document.head.appendChild(workStyle);
+
+  /* ── 3. Token truth: persist server balance, reconcile the HUD ──────────── */
+  var srvCredits = null;          /* { v:number, reset:string|null, ts:number } */
+
+  function loadCredits() {
+    try {
+      var d = JSON.parse(localStorage.getItem("rsx_srv_credits") || "null");
+      if (d && typeof d.v === "number" && Date.now() - d.ts < 48 * 3600e3) {
+        if (d.reset && new Date(d.reset).getTime() <= Date.now()) {
+          d.v = 25; /* window elapsed: server refills on next use */
+        }
+        srvCredits = d;
+      }
+    } catch (e) {}
   }
 
-  /* ── 2. Retrox generation animations (neural / glitch / wave / orbit / rain) ──
-     The app toggles #coderAnim.on while Retrox is thinking. We mount a canvas
-     overlay with five rotating visual styles instead of the plain text log.   */
-  var ANIM_STYLES = ["NEURAL", "GLITCH", "WAVE", "ORBIT", "CODE RAIN"];
-  var animHost = null, animCanvas = null, animCtx = null, animRAF = 0, animStyle = 0, animStart = 0, styleTimer = 0;
-  var rainCols = [], nodes = [], glitchText = "RETROX BUILDING";
-
-  function animSize() {
-    if (!animCanvas || !animHost) return;
-    var r = animHost.getBoundingClientRect();
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    animCanvas.width = Math.max(10, Math.floor(r.width * dpr));
-    animCanvas.height = Math.max(10, Math.floor(r.height * dpr));
-    animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  function saveCredits(v, reset) {
+    srvCredits = { v: v, reset: reset || null, ts: Date.now() };
+    try { localStorage.setItem("rsx_srv_credits", JSON.stringify(srvCredits)); } catch (e) {}
+    setCreditUI(v, reset);
   }
 
-  function animInitNodes(w, h) {
-    nodes = [];
-    for (var i = 0; i < 26; i++) {
-      nodes.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - .5) * .45, vy: (Math.random() - .5) * .45, r: 1 + Math.random() * 1.8 });
+  function setCreditUI(v, reset) {
+    var el = document.getElementById("freeHudValue");
+    if (el) el.textContent = String(v);
+    var n = document.getElementById("freeCreditsNum");
+    if (n) n.textContent = String(v);
+    var f = document.getElementById("freeCreditsFill");
+    if (f) f.style.width = Math.max(0, Math.min(100, (v / 25) * 100)) + "%";
+    var r = document.getElementById("freeCreditsReset");
+    if (r && reset) {
+      try {
+        var t = new Date(reset);
+        r.textContent = "refills " + (t.getMonth() + 1) + "/" + t.getDate() + " " +
+          ("0" + t.getHours()).slice(-2) + ":" + ("0" + t.getMinutes()).slice(-2);
+      } catch (e) {}
     }
   }
 
-  function animInitRain(w, h) {
-    rainCols = [];
-    var cols = Math.floor(w / 9);
-    for (var i = 0; i < cols; i++) rainCols.push({ y: Math.random() * h, sp: .8 + Math.random() * 1.6 });
+  function knownCredits() {
+    loadCredits();
+    return srvCredits ? srvCredits.v : null;
   }
 
-  function drawAnim(t) {
-    if (!animCanvas || !animCtx) return;
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    var w = animCanvas.width / dpr, h = animCanvas.height / dpr;
-    var ctx = animCtx;
-    ctx.clearRect(0, 0, w, h);
-    var el = (t - animStart) / 1000;
-    var accent = "#5b8cff", green = "#4ade80";
-
-    if (ANIM_STYLES[animStyle] === "NEURAL") {
-      if (!nodes.length) animInitNodes(w, h);
-      ctx.fillStyle = "rgba(91,140,255,.7)";
-      for (var i = 0; i < nodes.length; i++) {
-        var n = nodes[i];
-        n.x += n.vx; n.y += n.vy;
-        if (n.x < 0 || n.x > w) n.vx *= -1;
-        if (n.y < 0 || n.y > h) n.vy *= -1;
-        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
+  /* apply the last persisted server balance once the HUD exists */
+  (function restoreCredits() {
+    loadCredits();
+    if (!srvCredits) return;
+    var tries = 0;
+    var t = setInterval(function () {
+      tries++;
+      var el = document.getElementById("freeHudValue");
+      if (el || tries > 40) {
+        clearInterval(t);
+        if (el) setCreditUI(srvCredits.v, srvCredits.reset);
       }
-      ctx.strokeStyle = "rgba(91,140,255,.18)";
-      for (var a = 0; a < nodes.length; a++) {
-        for (var b = a + 1; b < nodes.length; b++) {
-          var dx = nodes[a].x - nodes[b].x, dy = nodes[a].y - nodes[b].y;
-          var d2 = dx * dx + dy * dy;
-          if (d2 < 3400) {
-            ctx.globalAlpha = 1 - d2 / 3400;
-            ctx.beginPath(); ctx.moveTo(nodes[a].x, nodes[a].y); ctx.lineTo(nodes[b].x, nodes[b].y); ctx.stroke();
-          }
-        }
-      }
-      ctx.globalAlpha = 1;
-    } else if (ANIM_STYLES[animStyle] === "GLITCH") {
-      ctx.font = "700 13px monospace";
-      ctx.textAlign = "center";
-      var slices = 6;
-      for (var s = 0; s < slices; s++) {
-        var yy = h / 2 - 10 + s * 4;
-        var jitter = Math.sin(el * 9 + s * 3) * 2.5;
-        ctx.fillStyle = s % 2 ? "rgba(91,140,255,.9)" : "rgba(74,222,128,.85)";
-        ctx.fillText(glitchText.slice(Math.floor(s * glitchText.length / slices), Math.floor((s + 1) * glitchText.length / slices)), w / 2 + jitter, yy);
-      }
-      ctx.fillStyle = "rgba(255,255,255,.25)";
-      for (var g = 0; g < 3; g++) {
-        if (Math.random() < .5) ctx.fillRect(0, Math.random() * h, w, 1);
-      }
-    } else if (ANIM_STYLES[animStyle] === "WAVE") {
-      ctx.lineWidth = 2;
-      for (var l2 = 0; l2 < 3; l2++) {
-        ctx.beginPath();
-        ctx.strokeStyle = l2 === 1 ? "rgba(74,222,128,.9)" : "rgba(91,140,255," + (0.55 - l2 * 0.18) + ")";
-        for (var x = 0; x <= w; x += 3) {
-          var y2 = h / 2 + Math.sin(x / 22 + el * (3 + l2) + l2) * (h / 4.2) * Math.sin(el * .8 + l2);
-          if (x === 0) ctx.moveTo(x, y2); else ctx.lineTo(x, y2);
-        }
-        ctx.stroke();
-      }
-    } else if (ANIM_STYLES[animStyle] === "ORBIT") {
-      var cx = w / 2, cy = h / 2;
-      for (var ring = 1; ring <= 3; ring++) {
-        var rr = Math.min(w, h) / 2.4 * ring / 3;
-        ctx.strokeStyle = ring === 2 ? "rgba(74,222,128,.5)" : "rgba(91,140,255,.45)";
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.stroke();
-        var ang = el * (1.4 + ring * .7) + ring;
-        var px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
-        ctx.fillStyle = ring === 2 ? "#4ade80" : "#5b8cff";
-        ctx.beginPath(); ctx.arc(px, py, 2.6, 0, 7); ctx.fill();
-      }
-      ctx.fillStyle = "rgba(255,255,255,.9)";
-      ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 7); ctx.fill();
-    } else { /* CODE RAIN */
-      if (!rainCols.length) animInitRain(w, h);
-      ctx.font = "10px monospace";
-      for (var c = 0; c < rainCols.length; c++) {
-        var col = rainCols[c];
-        col.y += col.sp;
-        if (col.y - 70 > h) col.y = -Math.random() * 40;
-        for (var rr2 = 0; rr2 < 6; rr2++) {
-          var ch = String.fromCharCode(33 + Math.floor(Math.random() * 60));
-          ctx.fillStyle = rr2 === 0 ? "rgba(74,222,128,.95)" : "rgba(91,140,255," + (0.5 - rr2 * .07) + ")";
-          ctx.fillText(ch, c * 9 + 2, col.y - rr2 * 9);
-        }
-      }
-    }
+    }, 400);
+  })();
 
-    /* status line */
-    ctx.font = "600 9px monospace";
-    ctx.textAlign = "left";
-    ctx.fillStyle = "rgba(255,255,255,.75)";
-    ctx.fillText("RETROX // " + ANIM_STYLES[animStyle] + " // " + (el.toFixed(1)) + "s", 8, h - 8);
-
-    animRAF = requestAnimationFrame(drawAnim);
-  }
-
-  function animStartFn() {
-    if (animRAF) return;
-    animHost = document.getElementById("coderAnim");
-    if (!animHost) return;
-    animHost.style.position = "relative";
-    animHost.style.fontSize = "0";
-    animCanvas = document.createElement("canvas");
-    animCanvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block";
-    animHost.appendChild(animCanvas);
-    animCtx = animCanvas.getContext("2d");
-    animSize();
-    animStart = performance.now();
-    animStyle = Math.floor(Math.random() * ANIM_STYLES.length);
-    styleTimer = setInterval(function () { animStyle = (animStyle + 1) % ANIM_STYLES.length; }, 3200);
-    window.addEventListener("resize", animSize);
-    animRAF = requestAnimationFrame(drawAnim);
-  }
-
-  function animStopFn() {
-    cancelAnimationFrame(animRAF);
-    animRAF = 0;
-    clearInterval(styleTimer);
-    window.removeEventListener("resize", animSize);
-    if (animCanvas && animCanvas.parentNode) animCanvas.parentNode.removeChild(animCanvas);
-    if (animHost) animHost.style.fontSize = "";
-  }
-
-  var animObserver = new MutationObserver(function (muts) {
-    for (var i = 0; i < muts.length; i++) {
-      var m = muts[i];
-      if (m.type === "attributes" && m.attributeName === "class") {
-        var el = m.target;
-        if (el.classList && el.classList.contains("on")) animStartFn();
-        else animStopFn();
-      }
-    }
-  });
-
-  function watchAnim() {
-    var el = document.getElementById("coderAnim");
-    if (el) animObserver.observe(el, { attributes: true, attributeFilter: ["class"] });
-    else setTimeout(watchAnim, 400);
-  }
-  watchAnim();
-
-  /* ── 3. Keep credits display in sync with the 25-credit economy ───────────
-     The server is authoritative; the fixed labels below just stay honest.   */
-  function syncCredits() {
-    var bar = document.getElementById("freeCreditsNum");
-    if (bar && !/\/\s*25|\/25/.test(bar.parentNode ? bar.parentNode.textContent : "")) {
-      /* parent text holds "…: <b id=freeCreditsNum>N</b>/15" — update suffix */
-      var parent = bar.parentNode;
-      if (parent) {
-        var kids = parent.childNodes;
-        for (var i = 0; i < kids.length; i++) {
-          if (kids[i].nodeType === 3 && kids[i].textContent.indexOf("/") !== -1) {
-            kids[i].textContent = "/" + 25;
-          }
-        }
-      }
-    }
-  }
-  setInterval(syncCredits, 3000);
-
-  /* ── 4. Live Roblox catalog search (SSE) ─────────────────────────────────
-     The free-ai call is upgraded to a streaming request. Each catalog search
-     the AI performs streams back live: all results (max 5) are shown in the
-     chat with thumbnails while Retrox is still building. When the response
-     finishes, the app's own "Retrox Verified Asset Search" card renders the
-     full verified set and the asset(s) chosen for the build get highlighted. */
+  /* ── 4a. SSE plumbing ───────────────────────────────────────────────────── */
   var chosenAssetIds = [];
   var livePanel = null;
 
@@ -3094,10 +2961,19 @@ We found your existing local account. After login, your data will be migrated au
     var newInit = {};
     for (var k in init) { if (Object.prototype.hasOwnProperty.call(init, k)) newInit[k] = init[k]; }
     newInit.body = JSON.stringify(payload);
+    actStart();
     return _origFetch(input, newInit).then(function (resp) {
       var ct = "";
       try { ct = resp.headers.get("Content-Type") || ""; } catch (e) {}
-      if (ct.indexOf("text/event-stream") === -1 || !resp.body) return resp;
+      if (ct.indexOf("text/event-stream") === -1 || !resp.body) {
+        /* non-stream answer (e.g. validation error): close the activity card */
+        var clone = resp.clone();
+        clone.json().then(function (d) {
+          if (d && d.error) actFail(String(d.error));
+          else actFinish(false, d);
+        }).catch(function () { actFail("No response from the AI service"); });
+        return resp;
+      }
       return readSSE(resp);
     });
   }
@@ -3119,11 +2995,15 @@ We found your existing local account. After login, your data will be migrated au
     var dec = new TextDecoder();
     var buf = "";
     var finished = false;
+    var streamText = "";
     return new Promise(function (resolve, reject) {
       function pump() {
         reader.read().then(function (chunk) {
           if (chunk.done) {
-            if (!finished) reject(new Error("The secure AI stream ended early. Please try again."));
+            if (!finished) {
+              actFail("The secure AI stream ended early. Please try again.");
+              reject(new Error("The secure AI stream ended early. Please try again."));
+            }
             return;
           }
           buf += dec.decode(chunk.value, { stream: true });
@@ -3134,24 +3014,291 @@ We found your existing local account. After login, your data will be migrated au
             if (!evt) continue;
             if (evt.event === "search") {
               try { liveSearchUpdate(evt.data); } catch (e) {}
+            } else if (evt.event === "reference") {
+              try { referenceCard(evt.data); } catch (e) {}
+            } else if (evt.event === "content") {
+              try { liveContentDelta(evt.data, function (t) { streamText = t; }); } catch (e) {}
             } else if (evt.event === "done") {
               finished = true;
               var data = evt.data || {};
               try { liveSearchDone(data); } catch (e) {}
+              try { saveCredits(data.tokens_remaining, data.reset_at); } catch (e) {}
+              try { updateModePrices(data.mode_prices); } catch (e) {}
+              try { actEncoding(data, streamText); } catch (e) { try { actFinish(true, data); } catch (e2) {} }
+              try { encodedFallbackCheck(data.content || streamText); } catch (e) { try { actEncodeResult(true, "Encoding finished"); } catch (e2) {} }
               resolve(new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } }));
             } else if (evt.event === "error") {
               finished = true;
               var ed = evt.data || {};
+              try { actFail(String(ed.error || "AI service error")); } catch (e) {}
               resolve(new Response(JSON.stringify(ed), { status: ed.status || 502, headers: { "Content-Type": "application/json" } }));
             }
           }
           if (!finished) pump();
         }, function (err) {
-          if (!finished) reject(err);
+          if (!finished) {
+            actFail("Connection to the AI service was lost");
+            reject(err);
+          }
         });
       }
       pump();
     });
+  }
+
+  /* ── 4b. Retrox Core indicator + real-event activity log ───────────────── */
+  /* Every entry below is wired to a REAL event: the request itself, catalog
+     tool calls (search SSE), reference tool calls, streamed code deltas,
+     the in-app encoder outcome, and the final response. Nothing is faked. */
+
+  var actStyle = document.createElement("style");
+  actStyle.textContent =
+    ".rsx-act-card{border:1px solid rgba(139,92,246,.35);background:linear-gradient(180deg,rgba(139,92,246,.07),rgba(34,211,238,.04));border-radius:11px;padding:9px 11px;font-size:.64rem}" +
+    ".rsx-act-head{display:flex;align-items:center;gap:8px}" +
+    ".rsx-act-state{font-weight:800;letter-spacing:.4px;color:#fff;transition:opacity .18s ease;text-shadow:0 0 10px rgba(139,92,246,.35)}" +
+    ".rsx-act-time{margin-left:auto;font:.58rem 'SF Mono',Consolas,monospace;color:var(--mu,#8b93a7);opacity:.75;flex:none}" +
+    ".rsx-core{display:inline-grid;grid-template-columns:repeat(3,5px);gap:2.5px;flex:none}" +
+    ".rsx-core i{width:5px;height:5px;border-radius:1.5px;background:linear-gradient(135deg,#8b5cf6,#22d3ee);opacity:.12;animation:rsxBlock 1.5s ease-in-out infinite}" +
+    ".rsx-core.settled i{animation:none;opacity:1}" +
+    ".rsx-core.failed i{animation:none;opacity:.3;background:#ff6b6b}" +
+    "@keyframes rsxBlock{0%,100%{opacity:.12;transform:scale(.72)}50%{opacity:1;transform:scale(1)}}" +
+    ".rsx-act-log{margin-top:8px;display:flex;flex-direction:column;gap:3px;max-height:148px;overflow-y:auto;transition:max-height .3s ease,opacity .25s ease,margin .3s ease}" +
+    ".rsx-act-card.collapsed .rsx-act-log{max-height:0;opacity:0;overflow:hidden;margin:0}" +
+    ".rsx-entry{display:flex;gap:6px;line-height:1.45;color:var(--mu,#8b93a7)}" +
+    ".rsx-entry .ic{width:1.1em;flex:none;text-align:center;color:#8b5cf6}" +
+    ".rsx-entry.ok .ic{color:#4ade80}" +
+    ".rsx-entry.fail .ic{color:#ff6b6b}" +
+    ".rsx-entry.run .ic{color:#22d3ee}" +
+    ".rsx-grp{color:var(--mu,#8b93a7)}" +
+    ".rsx-grp>.rsx-ghead{display:flex;gap:6px;cursor:pointer;color:#5b8cff;font-weight:700}" +
+    ".rsx-grp>.rsx-glist{display:none;margin:3px 0 0 14px;gap:3px;flex-direction:column}" +
+    ".rsx-grp.open>.rsx-glist{display:flex}" +
+    ".rsx-sum{margin-top:8px;cursor:pointer;color:#4ade80;font-weight:700;display:flex;gap:6px;align-items:center;user-select:none}" +
+    ".rsx-sum .chev{display:inline-block;transition:transform .2s;color:var(--mu,#8b93a7);font-size:.55rem}" +
+    ".rsx-act-card.collapsed .rsx-sum .chev{transform:rotate(90deg)}" +
+    ".rsx-typing{display:inline-flex;align-items:center;gap:7px;font-size:.68rem;color:var(--mu,#8b93a7)}" +
+    ".rsx-act-card *{box-sizing:border-box}";
+  document.head.appendChild(actStyle);
+
+  var act = null;
+
+  function actCore() {
+    var c = document.createElement("span");
+    c.className = "rsx-core";
+    for (var i = 0; i < 9; i++) {
+      var b = document.createElement("i");
+      b.style.animationDelay = (i * 0.12) + "s";
+      c.appendChild(b);
+    }
+    return c;
+  }
+
+  function actStart() {
+    var log = document.getElementById("aiLog");
+    if (!log) return;
+    if (act && act.el && act.el.isConnected) return; /* one card at a time */
+    var row = document.createElement("div");
+    row.className = "chat-row ai";
+    var card = document.createElement("div");
+    card.className = "rsx-act-card";
+    var head = document.createElement("div");
+    head.className = "rsx-act-head";
+    head.appendChild(actCore());
+    var state = document.createElement("span");
+    state.className = "rsx-act-state";
+    head.appendChild(state);
+    var time = document.createElement("span");
+    time.className = "rsx-act-time";
+    head.appendChild(time);
+    card.appendChild(head);
+    var logBox = document.createElement("div");
+    logBox.className = "rsx-act-log";
+    card.appendChild(logBox);
+    var sum = document.createElement("div");
+    sum.className = "rsx-sum";
+    sum.style.display = "none";
+    sum.addEventListener("click", function () {
+      card.classList.toggle("collapsed");
+      actRender();
+    });
+    card.appendChild(sum);
+    var bwrap = document.createElement("div");
+    bwrap.className = "bwrap";
+    bwrap.appendChild(card);
+    row.appendChild(bwrap);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    act = {
+      el: row, card: card, stateEl: state, timeEl: time, logEl: logBox, sumEl: sum,
+      entries: [], t0: Date.now(), timer: null, chars: 0, credits: 0, writeEntry: null, encEntry: null
+    };
+    act.timer = setInterval(function () {
+      if (!act || !act.el.isConnected) { if (act) clearInterval(act.timer); return; }
+      var s = Math.floor((Date.now() - act.t0) / 1000);
+      act.timeEl.textContent = s < 60 ? s + "s" : Math.floor(s / 60) + "m" + ("0" + (s % 60)).slice(-2) + "s";
+    }, 500);
+    actSetState("Thinking…");
+    actAdd("◌", "Thinking…", "run");
+  }
+
+  function actSetState(label) {
+    if (!act) return;
+    var el = act.stateEl;
+    el.style.opacity = "0";
+    setTimeout(function () {
+      el.textContent = label;
+      el.style.opacity = "1";
+    }, 160);
+  }
+
+  function actAdd(icon, text, cls) {
+    if (!act) return null;
+    var e = { icon: icon, text: text, cls: cls || "" };
+    act.entries.push(e);
+    actRender();
+    return e;
+  }
+
+  /* live-update one entry in place (used by the streaming writer) */
+  function actEntry(e, text, cls) {
+    if (!act || !e) return;
+    e.text = text;
+    if (cls) e.cls = cls;
+    actRender();
+  }
+
+  function actRender() {
+    if (!act) return;
+    var box = act.logEl;
+    box.innerHTML = "";
+    var groups = [];
+    for (var i = 0; i < act.entries.length; i++) {
+      var e = act.entries[i];
+      if (e.cls === "search") {
+        var g = groups[groups.length - 1];
+        if (g && g.grp) g.items.push(e);
+        else groups.push({ grp: true, items: [e] });
+      } else {
+        groups.push({ grp: false, items: [e] });
+      }
+    }
+    for (var j = 0; j < groups.length; j++) {
+      var gr = groups[j];
+      if (gr.grp && gr.items.length > 1) {
+        var wrap = document.createElement("div");
+        wrap.className = "rsx-grp";
+        var gh = document.createElement("div");
+        gh.className = "rsx-ghead";
+        gh.innerHTML = '<span class="ic">⌕</span><span>Searched catalog ×' + gr.items.length + "</span>";
+        gh.addEventListener("click", function (ev) {
+          ev.currentTarget.parentNode.classList.toggle("open");
+        });
+        wrap.appendChild(gh);
+        var list = document.createElement("div");
+        list.className = "rsx-glist";
+        for (var m = 0; m < gr.items.length; m++) list.appendChild(actEntryEl(gr.items[m]));
+        wrap.appendChild(list);
+        box.appendChild(wrap);
+      } else {
+        for (var n = 0; n < gr.items.length; n++) box.appendChild(actEntryEl(gr.items[n]));
+      }
+    }
+    if (!act.card.classList.contains("collapsed")) {
+      var lg = document.getElementById("aiLog");
+      if (lg) lg.scrollTop = lg.scrollHeight;
+    }
+  }
+
+  function actEntryEl(e) {
+    var d = document.createElement("div");
+    d.className = "rsx-entry " + (e.cls || "");
+    d.innerHTML = '<span class="ic">' + e.icon + "</span><span>" + escHtml(e.text) + "</span>";
+    return d;
+  }
+
+  /* done event: the app's own encoder now runs — report it honestly */
+  function actEncoding(data, streamText) {
+    if (!act) { actStart(); }
+    if (!act) return;
+    act.credits = Number(data && data.tokens_used) || 0;
+    act.chars = (streamText || (data && data.content) || "").length;
+    actSetState("Encoding…");
+    act.encEntry = actAdd("↻", "Encoding finished script…", "run");
+  }
+
+  /* encoder outcome (detected for real by encodedFallbackCheck) */
+  function actEncodeResult(ok, note) {
+    if (!act) return;
+    if (!act.encEntry) { actFinish(true, null); return; }
+    actEntry(act.encEntry, note || (ok ? "Encoded script ready" : "Block encoder skipped this build"), ok ? "ok" : "fail");
+    actFinish(true, null);
+  }
+
+  function actFinish(ok, data) {
+    if (!act || act.done) return;
+    if (data) act.credits = Number(data.tokens_used) || act.credits;
+    act.done = true;
+    clearInterval(act.timer);
+    var searches = 0, refs = 0;
+    for (var i = 0; i < act.entries.length; i++) {
+      if (act.entries[i].cls === "search") searches++;
+      if (act.entries[i].cls === "ref") refs++;
+    }
+    var core = act.card.querySelector(".rsx-core");
+    if (core) core.classList.add(ok ? "settled" : "failed");
+    actSetState(ok ? "Finished" : "Failed");
+    var parts = [];
+    if (searches) parts.push("catalog ×" + searches);
+    if (refs) parts.push(refs + " reference" + (refs === 1 ? "" : "s"));
+    if (act.chars) parts.push(act.chars + " chars written");
+    if (act.credits) parts.push(act.credits + " credit" + (act.credits === 1 ? "" : "s") + " used");
+    var sum = act.sumEl;
+    sum.style.display = "flex";
+    sum.innerHTML = "";
+    var si = document.createElement("span");
+    si.textContent = (ok ? "✓" : "✕") + " " + (ok ? "Finished" : "Failed") +
+      (parts.length ? " · " + parts.join(" · ") : "");
+    var ch = document.createElement("span");
+    ch.className = "chev";
+    ch.textContent = "▸";
+    sum.appendChild(si);
+    sum.appendChild(ch);
+    setTimeout(function () {
+      if (act && act.el.isConnected) { act.card.classList.add("collapsed"); }
+    }, 1600);
+  }
+
+  function actFail(msg) {
+    if (!act) return;
+    actAdd("✕", String(msg || "Failed").slice(0, 140), "fail");
+    actFinish(false, null);
+  }
+
+  /* streamed code deltas → real "writing" proof + live preview line */
+  function liveContentDelta(data, setStreamText) {
+    if (act) {
+      var cur = (act.writeChars || 0) + String((data && data.text) || "").length;
+      act.writeChars = cur;
+      if (!act.writeEntry) {
+        actSetState("Writing…");
+        act.writeEntry = actAdd("✎", "Writing script… 0 chars", "run");
+      } else {
+        actEntry(act.writeEntry, "Writing script… " + cur + " chars", "run");
+      }
+    }
+    var rows = document.querySelectorAll("#aiLog .chat-row.ai");
+    var ls = null;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      ls = rows[i].querySelector(".live-summary");
+      if (ls) break;
+    }
+    if (ls) {
+      var full = ls.getAttribute("data-full") || "";
+      full += String((data && data.text) || "");
+      ls.setAttribute("data-full", full);
+      setStreamText(full);
+      ls.textContent = full.length > 150 ? "…" + full.slice(-150) : full;
+    }
   }
 
   function liveCard(a) {
@@ -3171,6 +3318,11 @@ We found your existing local account. After login, your data will be migrated au
   }
 
   function liveSearchUpdate(ev) {
+    if (act) {
+      actSetState("Searching catalog…");
+      var n = Array.isArray(ev && ev.results) ? ev.results.length : 0;
+      actAdd("⌕", 'Searched catalog for "' + (ev && ev.keyword ? ev.keyword : "") + '" · ' + n + " result" + (n === 1 ? "" : "s"), "search");
+    }
     var log = document.getElementById("aiLog");
     if (!log) return;
     if (!livePanel || !livePanel.isConnected) {
@@ -3208,6 +3360,31 @@ We found your existing local account. After login, your data will be migrated au
     }
     wrap.appendChild(grid);
     body.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  /* reference image pulled by the AI as a visual reference for the user */
+  function referenceCard(ev) {
+    if (act) {
+      actAdd("⌕", "Read reference image: " + ((ev && ev.name) || "Roblox asset"), "ref");
+    }
+    var log = document.getElementById("aiLog");
+    if (!log) return;
+    var row = document.createElement("div");
+    row.className = "chat-row ai";
+    var img = ev && ev.thumbnail_url
+      ? '<img src="' + escHtml(ev.thumbnail_url) + '" alt="reference" referrerPolicy="no-referrer" loading="lazy" style="display:block;width:100%;max-width:220px;height:150px;object-fit:cover;border-radius:9px;background:#111827">'
+      : '<div style="font-size:.66rem;color:var(--mu);padding:12px 4px">no image available</div>';
+    row.innerHTML =
+      '<div class="bwrap"><div class="deep-research-card" style="border-color:rgba(139,92,246,.5)">' +
+      '<div class="deep-research-head"><span>Reference Image</span><span style="font-size:.55rem;color:#8b5cf6;letter-spacing:.4px">VISUAL REFERENCE</span></div>' +
+      '<div style="margin-top:8px">' + img + '</div>' +
+      '<div style="font-size:.7rem;font-weight:700;margin-top:7px;line-height:1.3">' + escHtml((ev && ev.name) || "Roblox asset") +
+      (ev && ev.id != null ? ' <span style="font-weight:400;color:var(--mu)">· ID ' + escHtml(String(ev.id)) + '</span>' : "") + '</div>' +
+      (ev && ev.note ? '<div style="font-size:.6rem;color:var(--mu);margin-top:4px;line-height:1.4">' + escHtml(ev.note) + '</div>' : "") +
+      '<div style="font-size:.56rem;color:var(--mu);margin-top:6px;opacity:.75">reference only — not embedded in the build unless used in the code</div>' +
+      '</div></div>';
+    log.appendChild(row);
     log.scrollTop = log.scrollHeight;
   }
 
@@ -3270,10 +3447,388 @@ We found your existing local account. After login, your data will be migrated au
     }
   }
 
+  /* typing row gets the same compact core indicator */
+  function typingIndicator() {
+    var tr = document.getElementById("typingRow");
+    if (!tr || tr.__rsxDone) return;
+    var vis = tr.offsetParent !== null || tr.style.display === "flex" || tr.style.display === "block";
+    if (!vis) return;
+    tr.__rsxDone = true;
+    var dots = tr.querySelector(".dots");
+    if (dots) dots.style.display = "none";
+    var t = document.createElement("span");
+    t.className = "rsx-typing";
+    t.appendChild(actCore());
+    var s = document.createElement("span");
+    s.textContent = " thinking…";
+    t.appendChild(s);
+    tr.appendChild(t);
+  }
 
-  /* ── 5. Icon upgrade: crisp SVG icons replace emoji glyphs ──────────────
-     Runs once after load and on DOM changes (debounced). Code areas, inputs
-     and chat message content are left untouched. */
+  /* ── 5. Encoded-script fallback: the user always gets the script ───────── */
+  function looksLikeBuild(code) {
+    if (!code) return false;
+    return /local\s|Instance\.new|CFrame\.new|Vector3\.new|game\.|script\.Parent/.test(code);
+  }
+
+  function encodedFallbackCheck(content) {
+    setTimeout(function () {
+      try {
+        var log = document.getElementById("aiLog");
+        if (!log || !looksLikeBuild(content)) { actEncodeResult(true, "No encoding needed"); return; }
+        var rows = log.querySelectorAll(".chat-row.ai");
+        var found = false;
+        for (var i = Math.max(0, rows.length - 3); i < rows.length; i++) {
+          var t = (rows[i].textContent || "");
+          if (/ENCODED/i.test(t) || rows[i].querySelector(".enc-direct-copy, .bprev, .enc-out")) { found = true; break; }
+        }
+        if (found) { actEncodeResult(true, "Encoded script ready"); return; }
+        actEncodeResult(false, "Block encoder skipped this build — Luau source provided below");
+        var row = document.createElement("div");
+        row.className = "chat-row ai";
+        row.innerHTML =
+          '<div class="bwrap"><div class="deep-research-card" style="border-color:rgba(250,150,60,.55)">' +
+          '<div class="deep-research-head"><span>Luau Source · in-app encoder skipped this build</span>' +
+          '<span style="font-size:.55rem;color:#fa9640;letter-spacing:.4px">FALLBACK</span></div>' +
+          '<div style="font-size:.6rem;color:var(--mu);margin-top:6px;line-height:1.45">' +
+          "The block encoder could not fully encode this script (some syntax is outside the supported block set). " +
+          "Copy the Luau below and paste it into the Encode tab, or simplify the request.</div>" +
+          '<div class="rsx-fb-code" style="margin-top:8px"></div>' +
+          '<div class="rsx-fb-actions" style="display:flex;gap:8px;margin-top:8px"></div>' +
+          '</div></div>';
+        var codeBox = row.querySelector(".rsx-fb-code");
+        var pre = document.createElement("pre");
+        pre.style.cssText = "font:.62rem/1.5 'SF Mono',Consolas,monospace;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.3);border:1px solid var(--bd);border-radius:8px;padding:9px;max-height:260px;overflow:auto;color:#c9f7d9";
+        pre.textContent = content;
+        codeBox.appendChild(pre);
+        var acts = row.querySelector(".rsx-fb-actions");
+        var btn = document.createElement("button");
+        btn.className = "btn btn-g";
+        btn.textContent = "Copy Luau source";
+        btn.style.cssText = "font-size:.66rem;min-height:30px";
+        btn.addEventListener("click", function () {
+          try { navigator.clipboard.writeText(content); btn.textContent = "Copied!"; setTimeout(function () { btn.textContent = "Copy Luau source"; }, 1600); } catch (e) {}
+        });
+        acts.appendChild(btn);
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+      } catch (e) { try { actEncodeResult(true, "Encoding finished"); } catch (e2) {} }
+    }, 3500);
+  }
+
+  /* ── 6. Galaxy Smartness slider — real modes, real billing ──────────────── */
+  /* Positions map 1:1 to the app's existing mode buttons:
+     FAST→fast, NORMAL→auto, THINK→think, LONG→long, CODER→coder.
+     Prices come from the server (mode_prices in every free-ai response).   */
+  var GX_MODES = [
+    { id: "fast",  name: "FAST",   icon: "⚡", free: true,  sub: "Lowest compute · quickest answers", price: 1 },
+    { id: "auto",  name: "NORMAL", icon: "●",  free: true,  sub: "Default everyday mode", price: 2 },
+    { id: "think", name: "THINK",  icon: "🧠", free: false, sub: "More reasoning for difficult problems", price: 3 },
+    { id: "long",  name: "LONG",   icon: "🔥", free: false, sub: "Extended reasoning for difficult tasks", price: 4 },
+    { id: "coder", name: "CODER",  icon: "💻", free: false, sub: "Complex programming & agentic coding", price: 5 }
+  ];
+  var gxIndex = 1;         /* NORMAL default */
+  var gxSuppress = false;  /* ignore observer echoes from our own clicks */
+
+  function gxDefaultPrices() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem("rsx_mode_prices") || "null"); } catch (e) {}
+    if (saved && typeof saved === "object") {
+      for (var i = 0; i < GX_MODES.length; i++) {
+        var p = Number(saved[GX_MODES[i].id]);
+        if (isFinite(p) && p > 0) GX_MODES[i].price = p;
+      }
+    }
+  }
+  gxDefaultPrices();
+
+  function updateModePrices(prices) {
+    if (!prices || typeof prices !== "object") return;
+    var changed = false;
+    for (var i = 0; i < GX_MODES.length; i++) {
+      var p = Number(prices[GX_MODES[i].id]);
+      if (isFinite(p) && p > 0 && p !== GX_MODES[i].price) { GX_MODES[i].price = p; changed = true; }
+    }
+    if (changed) {
+      try { localStorage.setItem("rsx_mode_prices", JSON.stringify(prices)); } catch (e) {}
+      gxRender();
+    }
+  }
+
+  var gxStyle = document.createElement("style");
+  gxStyle.textContent =
+    ".gx-wrap{margin:2px 0 10px}" +
+    ".gx-wrap *{box-sizing:border-box}" +
+    ".gx-head{display:flex;align-items:center;justify-content:space-between;gap:8px}" +
+    ".gx-title{font-size:.6rem;font-weight:800;letter-spacing:.9px;color:var(--mu,#8b93a7);text-transform:uppercase}" +
+    ".gx-active{font-size:.74rem;font-weight:800;letter-spacing:1.2px;color:#fff;text-shadow:0 0 12px rgba(139,92,246,.55)}" +
+    ".gx-sub{font-size:.6rem;color:var(--mu,#8b93a7);margin-top:2px;line-height:1.4}" +
+    ".gx-track{position:relative;height:34px;margin-top:9px;touch-action:none;cursor:pointer;outline:none}" +
+    ".gx-track:focus-visible .gx-thumb{box-shadow:0 0 0 3px rgba(139,92,246,.35),0 0 16px rgba(139,92,246,.5)}" +
+    ".gx-rail{position:absolute;left:9px;right:9px;top:13px;height:8px;border-radius:99px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08)}" +
+    ".gx-fill{position:absolute;left:9px;top:13px;height:8px;border-radius:99px;background:linear-gradient(90deg,#8b5cf6,#22d3ee);opacity:.75;transition:width .25s cubic-bezier(.4,0,.2,1);max-width:calc(100% - 18px)}" +
+    ".gx-thumb{position:absolute;top:7px;width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #8b5cf6;box-shadow:0 0 14px rgba(139,92,246,.6);transition:left .25s cubic-bezier(.4,0,.2,1);z-index:2}" +
+    ".gx-labels{display:grid;grid-template-columns:repeat(5,1fr);margin-top:7px}" +
+    ".gx-label{position:relative;text-align:center;font-size:.6rem;font-weight:700;color:var(--mu,#8b93a7);padding:7px 2px 6px;border-radius:8px;cursor:pointer;line-height:1.5;transition:background .18s,color .18s;-webkit-tap-highlight-color:transparent}" +
+    ".gx-label:hover{background:rgba(255,255,255,.05)}" +
+    ".gx-label.on{color:#fff;background:rgba(139,92,246,.14);box-shadow:inset 0 0 0 1px rgba(139,92,246,.4)}" +
+    ".gx-badge{display:block;font-size:.5rem;letter-spacing:.6px;font-weight:800;margin-top:2px}" +
+    ".gx-badge.free{color:#4ade80}" +
+    ".gx-badge.paid{color:#fbbf24}" +
+    ".gx-code{margin-top:7px;font:.56rem/1.4 'SF Mono',Consolas,monospace;color:rgba(74,222,128,.5);white-space:nowrap;overflow:hidden;height:14px;transition:opacity .3s}" +
+    ".gx-coder .gx-sub,.gx-coder .gx-active{font-family:'SF Mono',Consolas,monospace}" +
+    ".gx-coder .gx-track{background:rgba(1,10,20,.35);border-radius:10px}" +
+    "@media (max-width:560px){.gx-label{font-size:.52rem;padding:6px 1px 5px}.gx-active{font-size:.68rem}.gx-title{font-size:.55rem}}";
+  document.head.appendChild(gxStyle);
+
+  function gxWrap() { return document.getElementById("gxWrap"); }
+
+  function gxRender() {
+    var wrap = gxWrap();
+    if (!wrap) return;
+    var m = GX_MODES[gxIndex];
+    var actEl = wrap.querySelector(".gx-active");
+    if (actEl) actEl.textContent = m.icon + " " + m.name;
+    var sub = wrap.querySelector(".gx-sub");
+    if (sub) {
+      sub.textContent = m.sub + " · " + m.price + " credit" + (m.price === 1 ? "" : "s") + " per build (+2 with live catalog search)";
+      sub.style.color = m.free ? "" : "#fbbf24";
+    }
+    var track = wrap.querySelector(".gx-track");
+    if (track) {
+      track.setAttribute("aria-valuenow", String(gxIndex + 1));
+      track.setAttribute("aria-valuetext", m.name);
+      var thumb = track.querySelector(".gx-thumb");
+      if (thumb) thumb.style.left = "calc(9px + (100% - 38px) * " + (gxIndex / 4) + ")";
+      var fill = track.querySelector(".gx-fill");
+      if (fill) fill.style.width = "calc((100% - 18px) * " + (gxIndex / 4) + ")";
+    }
+    var labels = wrap.querySelectorAll(".gx-label");
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].classList.toggle("on", i === gxIndex);
+      var b = labels[i].querySelector(".gx-badge");
+      if (b) {
+        var pm = GX_MODES[i];
+        b.textContent = pm.free ? "FREE" : "PAID · " + pm.price + "cr";
+        b.className = "gx-badge " + (pm.free ? "free" : "paid");
+      }
+    }
+    var code = wrap.querySelector(".gx-code");
+    if (code) {
+      code.style.display = GX_MODES[gxIndex].id === "coder" ? "block" : "none";
+    }
+    wrap.classList.toggle("gx-coder", GX_MODES[gxIndex].id === "coder");
+    var plan = document.getElementById("gxPlan");
+    if (plan) {
+      var planOn = currentModeId() === "plan";
+      plan.classList.toggle("on", planOn);
+      wrap.style.opacity = planOn ? ".55" : "1";
+    }
+  }
+
+  function currentModeId() {
+    var btn = document.querySelector("#modeRow button.on");
+    return btn ? (btn.getAttribute("data-mode") || "auto") : "auto";
+  }
+
+  function gxIndexOf(id) {
+    for (var i = 0; i < GX_MODES.length; i++) if (GX_MODES[i].id === id) return i;
+    return -1;
+  }
+
+  function gxAffordable(i) {
+    var m = GX_MODES[i];
+    if (m.free) return true;
+    var have = knownCredits();
+    return have == null || have >= m.price; /* unknown balance: let the server decide */
+  }
+
+  function gxInsufficientUI(i) {
+    var m = GX_MODES[i];
+    var wrap = gxWrap();
+    var sub = wrap ? wrap.querySelector(".gx-sub") : null;
+    if (sub) {
+      sub.textContent = m.name + " needs " + m.price + " credits — you don't have enough. Still on " +
+        GX_MODES[gxIndex].name + ".";
+      sub.style.color = "#ff6b6b";
+    }
+    var modal = document.getElementById("zeroTokensModal");
+    if (modal) {
+      modal.style.display = "flex";
+      modal.style.alignItems = "center";
+      modal.style.justifyContent = "center";
+    }
+    var st = document.getElementById("aiSt");
+    if (st) {
+      st.textContent = "Not enough Retrox tokens for " + m.name + " mode. Current mode kept: " + GX_MODES[gxIndex].name + ".";
+      st.className = "st err";
+      st.style.display = "block";
+    }
+  }
+
+  function gxSet(i) {
+    i = Math.max(0, Math.min(GX_MODES.length - 1, i));
+    if (i === gxIndex && currentModeId() === GX_MODES[i].id) { gxRender(); return true; }
+    if (!gxAffordable(i)) { gxInsufficientUI(i); gxRender(); return false; }
+    var btn = document.querySelector('#modeRow button[data-mode="' + GX_MODES[i].id + '"]');
+    gxSuppress = true;
+    if (btn) btn.click();
+    gxIndex = i;
+    try { localStorage.setItem("rsx_galaxy_mode", String(i)); } catch (e) {}
+    setTimeout(function () { gxSuppress = false; gxRender(); }, 120);
+    gxRender();
+    return true;
+  }
+
+  function gxNearest(clientX, track) {
+    var r = track.getBoundingClientRect();
+    var p = (clientX - r.left - 19) / Math.max(1, r.width - 38);
+    p = Math.max(0, Math.min(1, p));
+    return Math.round(p * 4);
+  }
+
+  function gxGhost(i) {
+    var wrap = gxWrap();
+    if (!wrap) return;
+    var track = wrap.querySelector(".gx-track");
+    var thumb = track.querySelector(".gx-thumb");
+    if (thumb) thumb.style.left = "calc(9px + (100% - 38px) * " + (i / 4) + ")";
+  }
+
+  function gxBuild() {
+    var modeBar = document.querySelector(".mode-bar");
+    if (!modeBar || gxWrap()) return;
+    var wrap = document.createElement("div");
+    wrap.className = "gx-wrap";
+    wrap.id = "gxWrap";
+    var labels = "";
+    for (var i = 0; i < GX_MODES.length; i++) {
+      labels += '<div class="gx-label" data-i="' + i + '">' + GX_MODES[i].icon + " " + GX_MODES[i].name +
+        '<span class="gx-badge"></span></div>';
+    }
+    wrap.innerHTML =
+      '<div class="gx-head"><span class="gx-title">Galaxy Smartness · Thinking Mode</span>' +
+      '<button id="gxPlan" style="font-size:.56rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);color:var(--mu,#8b93a7);border-radius:7px;padding:3px 8px;cursor:pointer">📋 Plan</button></div>' +
+      '<div class="gx-active"></div>' +
+      '<div class="gx-sub"></div>' +
+      '<div class="gx-track" id="gxTrack" role="slider" tabindex="0" aria-label="Galaxy Smartness mode" aria-valuemin="1" aria-valuemax="5">' +
+      '<div class="gx-rail"></div><div class="gx-fill"></div><div class="gx-thumb"></div></div>' +
+      '<div class="gx-labels">' + labels + "</div>" +
+      '<div class="gx-code" style="display:none"></div>';
+    modeBar.parentNode.insertBefore(wrap, modeBar);
+
+    /* hide the app's 5 mode buttons; Plan moves into the slider head.
+       Hidden buttons stay functional — the slider clicks them.              */
+    var hs = document.createElement("style");
+    hs.textContent = '#modeRow button[data-mode="auto"],#modeRow button[data-mode="fast"],#modeRow button[data-mode="think"],#modeRow button[data-mode="long"],#modeRow button[data-mode="coder"]{display:none!important}' +
+      "#modeRow{gap:6px}" +
+      '#modeRow button[data-mode="plan"]{font-size:.56rem;padding:3px 9px;opacity:.85}' +
+      "#gxPlan.on{color:#fff;border-color:rgba(139,92,246,.6);background:rgba(139,92,246,.18)}";
+    document.head.appendChild(hs);
+
+    var track = wrap.querySelector(".gx-track");
+
+    /* drag (mouse + touch via pointer events) */
+    var dragging = false;
+    track.addEventListener("pointerdown", function (ev) {
+      dragging = true;
+      track.setPointerCapture && track.setPointerCapture(ev.pointerId);
+      var thumb = track.querySelector(".gx-thumb");
+      if (thumb) thumb.style.transition = "none";
+      gxGhost(gxNearest(ev.clientX, track));
+    });
+    track.addEventListener("pointermove", function (ev) {
+      if (!dragging) return;
+      ev.preventDefault();
+      gxGhost(gxNearest(ev.clientX, track));
+    });
+    function endDrag(ev) {
+      if (!dragging) return;
+      dragging = false;
+      var thumb = track.querySelector(".gx-thumb");
+      if (thumb) thumb.style.transition = "";
+      gxSet(gxNearest(ev.clientX, track));
+    }
+    track.addEventListener("pointerup", endDrag);
+    track.addEventListener("pointercancel", endDrag);
+
+    /* tap on labels */
+    wrap.querySelectorAll(".gx-label").forEach(function (lab) {
+      lab.addEventListener("click", function () {
+        gxSet(Number(lab.getAttribute("data-i")));
+      });
+    });
+
+    /* keyboard */
+    track.addEventListener("keydown", function (ev) {
+      if (ev.key === "ArrowRight") { ev.preventDefault(); gxSet(gxIndex + 1); }
+      else if (ev.key === "ArrowLeft") { ev.preventDefault(); gxSet(gxIndex - 1); }
+      else if (ev.key === "Home") { ev.preventDefault(); gxSet(0); }
+      else if (ev.key === "End") { ev.preventDefault(); gxSet(4); }
+    });
+
+    /* plan chip */
+    var planBtn = wrap.querySelector("#gxPlan");
+    planBtn.addEventListener("click", function () {
+      var pbtn = document.querySelector('#modeRow button[data-mode="plan"]');
+      if (pbtn) {
+        gxSuppress = true;
+        pbtn.click();
+        setTimeout(function () { gxSuppress = false; gxRender(); }, 120);
+      }
+    });
+
+    /* decorative binary strip for coder mode (purely visual) */
+    (function coderStrip() {
+      var code = wrap.querySelector(".gx-code");
+      if (!code) return;
+      var frame = 0;
+      setInterval(function () {
+        if (GX_MODES[gxIndex].id !== "coder") return;
+        frame++;
+        var s = "";
+        for (var i = 0; i < 96; i++) s += ((Math.sin(i * 3.7 + frame) + Math.random()) > 1.1 ? "1" : "0") + (i % 8 === 7 ? " " : "");
+        code.textContent = s;
+      }, 160);
+    })();
+
+    /* keep in sync with any app-side mode change */
+    var row = document.getElementById("modeRow");
+    if (row) {
+      new MutationObserver(function () {
+        if (gxSuppress) return;
+        var id = currentModeId();
+        if (id === "plan") { gxRender(); return; }
+        var i = gxIndexOf(id);
+        if (i !== -1 && i !== gxIndex) gxIndex = i;
+        gxRender();
+      }).observe(row, { subtree: true, attributes: true, attributeFilter: ["class"] });
+    }
+
+    /* restore last selected mode (the app's own state wins if it differs) */
+    var saved = null;
+    try { saved = Number(localStorage.getItem("rsx_galaxy_mode")); } catch (e) {}
+    var appMode = currentModeId();
+    if (isFinite(saved) && saved >= 0 && saved <= 4) gxIndex = saved;
+    var ai = gxIndexOf(appMode);
+    if (ai !== -1) gxIndex = ai;
+    gxRender();
+  }
+
+  (function gxBootLoop() {
+    var tries = 0;
+    var t = setInterval(function () {
+      tries++;
+      if (gxWrap() || tries > 50) {
+        clearInterval(t);
+        gxRender();
+      } else {
+        gxBuild();
+      }
+    }, 400);
+  })();
+
+  /* ── 7. Icon upgrade: crisp SVG icons replace emoji glyphs ─────────────── */
   var RSX_ICONS = {
     "\u{1F528}": "m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9m0-6 6.373 6.373a1 1 0 1 0 3 3L15 6",
     "\u26A1": "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
@@ -3295,7 +3850,7 @@ We found your existing local account. After login, your data will be migrated au
     "\u{1F4E6}": "M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.27 13.95 12 18.75l8.73-4.8M12 12V3m-4.5 1.27 9 5.15",
     "\u2726": "M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"
   };
-  var RSX_KEEP = ".coder,.enc-out,.code-preview,textarea,input,script,style,.bwrap,.live-edit-log,.edit-log,.rsx-skip";
+  var RSX_KEEP = ".coder,.enc-out,.code-preview,textarea,input,script,style,.bwrap,.live-edit-log,.edit-log,.rsx-act-card,.rsx-skip";
 
   function rsxIconSvg(ch) {
     var p = RSX_ICONS[ch];
@@ -3346,6 +3901,7 @@ We found your existing local account. After login, your data will be migrated au
 
   var rsxIconTimer = null;
   function rsxScheduleIcons() {
+    typingIndicator();
     if (rsxIconTimer) return;
     rsxIconTimer = setTimeout(function () {
       rsxIconTimer = null;
@@ -3356,6 +3912,12 @@ We found your existing local account. After login, your data will be migrated au
   if (document.readyState !== "loading") rsxScheduleIcons();
   var rsxIconObserver = new MutationObserver(rsxScheduleIcons);
   try { rsxIconObserver.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", lockUI);
+  } else {
+    lockUI();
+  }
 
 })();
 
