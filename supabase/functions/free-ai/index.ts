@@ -495,19 +495,21 @@ UI BUILDS (ScreenGui / menus / HUDs / shops / dialogs):
     meaningfully either way (padding of a few px, icon size) — never for a
     panel's overall Size or its screen Position.
   * Never write Vector2.new for GUIs.
-- Style ONLY with 2010 properties: BackgroundColor3, BackgroundTransparency,
-  TextColor3, TextColor, TextScaled, TextWrap (NOT TextWrapped — the 2010 name
-  is TextWrap), Font — RetroStudio's era supports EXACTLY these fonts, nothing
+- Style ONLY with period-accurate properties. Confirmed safe (pre-mid-2015):
+  BackgroundColor3, BackgroundColor, BackgroundTransparency, BorderColor3,
+  BorderColor, BorderSizePixel, ClipsDescendants, Draggable, Active,
+  Selectable, TextColor3, TextColor, TextScaled, TextWrap (NOT TextWrapped —
+  the 2010 name is TextWrap), Font — RetroStudio's era supports EXACTLY these fonts, nothing
   else: Enum.Font.Legacy, Enum.Font.Arial, Enum.Font.ArialBold,
   Enum.Font.SourceSans, Enum.Font.SourceSansBold, Enum.Font.SourceSansLight,
   Enum.Font.SourceSansItalic. Default to Enum.Font.SourceSansBold for
   headings/buttons and Enum.Font.SourceSans for body text — NEVER Gotham,
   Bodoni, Garamond, Cartoon, Fantasy, or any other modern font, they don't
   exist yet. FontSize (Enum.FontSize.Size10/Size12/Size14/Size18/Size24/Size36),
-  ZIndex, Visible, Enabled, Image for ImageLabel/ImageButton,
-  BackgroundColor for Frames. NO RichText, NO FontFace, NO AutomaticSize,
-  NO TextTransparency-era extras you are unsure about — when in doubt use the
-  2010 property list above only.
+  ZIndex, Visible, Enabled, Image for ImageLabel/ImageButton. NEVER use these
+  — all added 2016 or later: AnchorPoint, AutomaticSize, LayoutOrder,
+  SizeConstraint, NextSelectionUp/Down/Left/Right, RichText, FontFace,
+  TextTransparency.
 - RETROSTUDIO UI CLASS WHITELIST (2010-era) — these are the ONLY GUI classes
   that exist: ScreenGui, Frame, TextLabel, TextButton, TextBox, ImageLabel,
   ImageButton, BillboardGui. NOTHING else: NO ScrollingFrame (2014+), NO
