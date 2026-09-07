@@ -4609,6 +4609,28 @@ m=l.match(/^repeat$/);if(m){var r=grabBody(i+1);i=r.next;var bb=single(r.body);v
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\.LookVector$/);if(m){var b=add("GetCFrameDirection","Get CFrame Direction",ESC+"CFrame"+ESC+"0"+ESC+esc(m[2])+ESC+"Direction"+ESC+"0"+ESC+"Forward",ESC+"Direction"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+)\.RightVector$/);if(m){var b=add("GetCFrameDirection","Get CFrame Direction",ESC+"CFrame"+ESC+"0"+ESC+esc(m[2])+ESC+"Direction"+ESC+"0"+ESC+"Right",ESC+"Direction"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*tick\(\)$/);if(m){var b=add("GetServerTimeNow","Server Time","",ESC+"Answer"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
+    /* v53: TweenService tween -> TweenObjectProperty block */
+    m=l.match(/^(?:game:GetService\("TweenService"\)|TweenService):Create\((\w+),\s*TweenInfo\.new\(([^)]*)\),\s*\{(\w+)\s*=\s*([^}]+)\}\):Play\(\)$/);if(m){
+      if(l.indexOf(",",l.indexOf("}",0))>=0&&/\},\s*\{/.test(l)){}
+      var ti=m[2].split(",").map(function(x){return x.trim();});
+      var tTime=ti[0]||"1";
+      var tStyle=(ti[1]||"Sine").replace("Enum.EasingStyle.","").replace(/^Enum$/,"Sine")||"Sine";
+      var tDir=(ti[2]||"Out").replace("Enum.EasingDirection.","")||"Out";
+      var tCount=ti[3]||"0";
+      var tRev=ti[4]||"0";
+      var tVal=(m[4]||"").trim();
+      if(!tVal){i++;continue;}
+      var vm=tVal.match(/^Vector3\.new\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)$/);
+      var cm=tVal.match(/^Color3(?:\.new|\.fromRGB)\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)$/);
+      var tvv;
+      if(vm)tvv=tv("1",hexF(vm[1])+","+hexF(vm[2])+","+hexF(vm[3]),"Vector3");
+      else if(cm)tvv=tv("1",hexF(cm[1])+","+hexF(cm[2])+","+hexF(cm[3]),"Color3");
+      else if(/^["']/.test(tVal))tvv=tv("1",tVal.slice(1,-1),"String");
+      else if(!isNaN(parseFloat(tVal)))tvv=tv("1",hexF(tVal),"Number");
+      else tvv=tv("2",tVal.replace(/\s+/g,""),"");
+      var tb=add("TweenObjectProperty","Tween "+m[3],ESC+"Object"+ESC+"0"+ESC+esc(m[2])+ESC+"Property"+ESC+"0"+ESC+esc(m[3])+ESC+"Value"+tvv+ESC+"Time"+ESC+"0"+ESC+tTime+ESC+"EasingStyle"+ESC+"0"+ESC+esc(tStyle)+ESC+"EasingDirection"+ESC+"0"+ESC+esc(tDir)+ESC+"RepeatCount"+ESC+"0"+ESC+tCount+ESC+"Reverses"+ESC+"0"+ESC+(tRev==="true"||tRev==="1"?"1":"0"),"");
+      if(tb)top.push(tb);i++;continue;
+    }
     m=l.match(/^(\w+):Fire\(([^)]*)\)$/);if(m){var a=parseArgs(m[2]);var b=add("BindableFire2","Bindable Fire",ESC+"BindableEvent"+ESC+"0"+ESC+esc(m[1])+argsStr(a,"TUPLEPARAM_Parameters"),"");if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+):Invoke\(([^)]*)\)$/);if(m){var a=parseArgs(m[3]);var b=add("BindableFunctionInvoke","Bindable Function Invoke",ESC+"BindableFunction"+ESC+"0"+ESC+esc(m[2])+argsStr(a,"TUPLEPARAM_Parameters"),ESC+"TUPLE_Output"+ESC+"0"+ESC+"TUPLEPARAM_Output_1"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}
     m=l.match(/^local\s+(\w+)\s*=\s*(\w+):InvokeServer\(([^)]*)\)$/);if(m){var a=parseArgs(m[3]);var b=add("RemoteFunctionInvokeServer","Remote Function Invoke Server",ESC+"RemoteFunction"+ESC+"0"+ESC+esc(m[2])+argsStr(a,"TUPLEPARAM_Parameters"),ESC+"TUPLE_Output"+ESC+"0"+ESC+"TUPLEPARAM_Output_1"+ESC+esc(m[1]));if(b)top.push(b);i++;continue;}

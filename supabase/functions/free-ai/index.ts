@@ -415,6 +415,29 @@ freehand your own coordinates from scratch, adapt these formulas):
     unrelated coordinates — the RATIOS in this template are what keep a build
     correctly proportioned and walkable.
 
+SMALL OBJECTS / TOOLS / HANDHELD ITEMS — get the SHAPE right, not just the color:
+- A real-world object's proportions must be reflected in the Part Size, not just
+  its name/BrickColor. The single most common failure: making every object a
+  thick short block regardless of what it actually is. Before setting Size, ask
+  "is this long and thin, flat and wide, or roughly cube-shaped?" and pick
+  dimensions that answer that:
+  * Rod / pole / fishing rod / spear / staff / wand: LONG and THIN on both other
+    axes. Example fishing rod: Size = Vector3.new(0.15, 0.15, 5) — thickness
+    0.15 studs, length 5 studs — never a thick plank like Vector3.new(1, 1, 5)
+    or worse Vector3.new(3, 1, 8). Orient it along its length with CFrame/
+    Orientation so it reads as a rod, not a beam.
+  * Sword / knife / bat / axe handle: thin blade/shaft, Size like
+    Vector3.new(0.2, 3, 0.4) for a blade, separate thin Size for a handle.
+  * Sheet-like (door, sign, book, plank of wood used AS a plank): flat — one
+    axis much smaller than the other two, e.g. Vector3.new(4, 0.2, 2).
+  * Chunky object (crate, rock, brick, block): roughly cube/box, all axes
+    similar, e.g. Vector3.new(2, 2, 2).
+  * A tool made of multiple parts (e.g. rod + reel + line) should weld/parent
+    each piece with its own correctly-proportioned Size — never approximate the
+    whole tool as one single block.
+- Sanity-check every Part's Size against the real object before finishing: if
+  any dimension looks arbitrary or copy-pasted from an unrelated part, fix it.
+
 BUILD QUALITY:
 - Anchor every structural part you place (Anchored = true) unless it must move.
 - Connect moving parts to a static anchor with WeldConstraint (Part0 = anchor, Part1 = mover).
@@ -446,28 +469,59 @@ UI BUILDS (ScreenGui / menus / HUDs / shops / dialogs):
   GuiObjects straight to Workspace or ServerScriptService.
 - Build the tree top-down and parent each piece as you create it: ScreenGui ->
   Frame (container) -> child GuiObjects (TextLabel, TextButton, ImageLabel,
-  ImageButton, TextBox, ScrollingFrame).
+  ImageButton, TextBox).
 - Use UDim2 for every Size/Position — UDim2.new(scaleX, offsetX, scaleY, offsetY).
   Prefer scale-based layout (e.g. UDim2.new(0.4, 0, 0.5, 0)) so it holds up on
   different screen sizes; use offset pixels only for fixed-size details like
   padding or icon sizes.
-- NO AnchorPoint — it does not exist in RetroStudio (2010-era UI). To center
-  a Frame, subtract half its size manually: Position = UDim2.new(0.5, -160, 0.5, -110)
-  for a 320x220 panel. Never write Vector2.new for GUIs.
+- NO AnchorPoint — it does not exist in RetroStudio (2010-era UI).
+- MOBILE-SAFE POSITIONING IS MANDATORY — players are on phones (narrow portrait
+  screens) as often as PC, and fixed pixel offsets that look fine on a 1920px
+  desktop push panels half off-screen on a 360-400px-wide phone. Rules:
+  * Size every top-level panel with SCALE ONLY, e.g. Size = UDim2.new(0.8, 0, 0.6, 0)
+    (80% of screen width/height) — NEVER a raw pixel Size like UDim2.new(0, 320, 0, 220)
+    for a panel meant to be seen on any device.
+  * To center a Frame sized with scale (sW, sH), compute the position with pure
+    scale math: Position = UDim2.new((1 - sW) / 2, 0, (1 - sH) / 2, 0). For
+    Size = UDim2.new(0.8, 0, 0.6, 0) that's Position = UDim2.new(0.1, 0, 0.2, 0).
+    Do NOT center with a fixed pixel offset like UDim2.new(0.5, -160, 0.5, -110)
+    — that assumes a specific desktop resolution and drifts off-screen on other
+    aspect ratios.
+  * Children inside a panel: size/position them with scale relative to the
+    PARENT panel (e.g. a close button at Size = UDim2.new(0.15, 0, 0, 26),
+    Position = UDim2.new(0.83, 0, 0, 6)) instead of large fixed offsets, so they
+    stay inside the panel at any panel size.
+  * Small fixed pixel offsets are fine ONLY for tiny details that don't scale
+    meaningfully either way (padding of a few px, icon size) — never for a
+    panel's overall Size or its screen Position.
+  * Never write Vector2.new for GUIs.
 - Style ONLY with 2010 properties: BackgroundColor3, BackgroundTransparency,
-  TextColor3, TextScaled, TextWrapped, Font (use Enum.Font.ArialBold or
-  Enum.Font.Legacy — 2010-era fonts), ZIndex, Visible, Enabled.
-- RETROSTUDIO UI CLASS WHITELIST — these are the ONLY GUI classes that exist:
-  ScreenGui, Frame, ScrollingFrame, TextLabel, TextButton, TextBox, ImageLabel,
-  ImageButton. NOTHING else: NO UICorner, NO UIListLayout/UIGridLayout, NO
-  UIPadding, NO UIStroke, NO UIGradient — Instance.new of any UI* modifier
+  TextColor3, TextColor, TextScaled, TextWrap (NOT TextWrapped — the 2010 name
+  is TextWrap), Font — RetroStudio's era supports EXACTLY these fonts, nothing
+  else: Enum.Font.Legacy, Enum.Font.Arial, Enum.Font.ArialBold,
+  Enum.Font.SourceSans, Enum.Font.SourceSansBold, Enum.Font.SourceSansLight,
+  Enum.Font.SourceSansItalic. Default to Enum.Font.SourceSansBold for
+  headings/buttons and Enum.Font.SourceSans for body text — NEVER Gotham,
+  Bodoni, Garamond, Cartoon, Fantasy, or any other modern font, they don't
+  exist yet. FontSize (Enum.FontSize.Size10/Size12/Size14/Size18/Size24/Size36),
+  ZIndex, Visible, Enabled, Image for ImageLabel/ImageButton,
+  BackgroundColor for Frames. NO RichText, NO FontFace, NO AutomaticSize,
+  NO TextTransparency-era extras you are unsure about — when in doubt use the
+  2010 property list above only.
+- RETROSTUDIO UI CLASS WHITELIST (2010-era) — these are the ONLY GUI classes
+  that exist: ScreenGui, Frame, TextLabel, TextButton, TextBox, ImageLabel,
+  ImageButton, BillboardGui. NOTHING else: NO ScrollingFrame (2014+), NO
+  SurfaceGui, NO UICorner, NO UIListLayout/UIGridLayout, NO UIPadding, NO
+  UIStroke, NO UIGradient — Instance.new of any UI* modifier or 2014+ class
   ERRORS and breaks the whole script. Panels are rectangles; space children
-  manually with Position math. For scrolling lists use ScrollingFrame with
-  CanvasSize = UDim2.new(0, 0, 0, <contentHeight>) and ScrollBarThickness = 6.
+  manually with Position math. Long lists: build a taller Frame and show a
+  few rows, or paginate with Next/Prev buttons — there is no scrolling UI in
+  2010.
 - Wire interactions with real events: button.MouseButton1Click:Connect(...),
-  frame.Visible = true/false for open/close, TweenService for slide/fade
-  transitions. Give a close/back button — never build a dialog with no way
-  to dismiss it.
+  frame.Visible = true/false for open/close. There is NO TweenService in
+  2010 — animate by setting properties directly (or game:GetService("RunService")
+  .Heartbeat frames). Give a close/back button — never build a dialog with no
+  way to dismiss it.
 - Keep one LocalScript (or the Main Script if the whole build is server-only
   logic) driving the UI's behavior — don't scatter UI logic across scripts.
 
@@ -792,11 +846,11 @@ Deno.serve(async (request) => {
   const openrouterKey = Deno.env.get("OPENROUTER_API_KEY");
 
   // Provider fallback chain — gpt-oss-20b ONLY, no other model, ever:
-  // 1) OpenRouter free tier -> 2) OpenRouter paid tier -> 3) Groq -> 4) Hugging Face
+  // 1) OpenRouter -> 2) Groq -> 3) Hugging Face (OpenRouter free tier retired)
   type Provider = { name: string; url: string; key: string; model: string };
   const PROVIDERS: Provider[] = [];
   if (openrouterKey) {
-    PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b:free" });
+    // The :free OpenRouter tier was retired — gpt-oss-20b only available paid now.
     PROVIDERS.push({ name: "openrouter", url: OPENROUTER_URL, key: openrouterKey, model: "openai/gpt-oss-20b" });
   }
   if (groqKey) {
