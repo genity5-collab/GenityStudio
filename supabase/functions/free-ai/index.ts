@@ -415,6 +415,98 @@ freehand your own coordinates from scratch, adapt these formulas):
     unrelated coordinates — the RATIOS in this template are what keep a build
     correctly proportioned and walkable.
 
+SHOP / STORE BUILDING TEMPLATE — never build a shop as one giant block. A shop
+is a small open-front or fully-enclosed structure PLUS a counter and a sign,
+never a single crate. Given width W, depth D, wall height H, wall thickness T
+(use W=10, D=8, H=7, T=1 if unspecified), centered at origin:
+  - Floor: Size = Vector3.new(W, 1, D), CFrame.new(0, 0.5, 0)
+  - Back wall: Size = Vector3.new(W, H, T), CFrame.new(0, 1+H/2, -D/2)
+  - Left wall: Size = Vector3.new(T, H, D), CFrame.new(-W/2, 1+H/2, 0)
+  - Right wall: Size = Vector3.new(T, H, D), CFrame.new(W/2, 1+H/2, 0)
+  - Front: leave OPEN (no front wall) for a walk-up stand, OR add a doorway
+    like the house template if the user wants a fully enclosed shop.
+  - Roof: flat cap, Size = Vector3.new(W+2, 1, D+2), CFrame.new(0, 1+H+0.5, 0)
+  - Counter (mandatory — this is what makes it read as a SHOP, not a shed):
+    Size = Vector3.new(W-2, 3, 1.5), CFrame.new(0, 1+1.5, D/2-1) — a low wide
+    part spanning most of the open front, roughly counter height (3 studs).
+  - Sign: a thin flat Part above the counter, Size = Vector3.new(4, 1.5, 0.2),
+    CFrame.new(0, 1+H-1, D/2-0.3), with a SurfaceGui or a BillboardGui child
+    showing the shop's name as a TextLabel — never leave a shop unlabeled.
+  - Item displays (optional, if the user wants visible merchandise): small
+    Parts (roughly Vector3.new(1,1,1) each) placed in a row ON TOP of the
+    counter, spaced by 1.5 studs.
+  - The purchase interaction goes on the COUNTER or a dedicated "BuyButton"
+    Part, not on a wall or the roof — see the PURCHASE FLOW pattern below.
+
+CONDITIONAL LOGIC — USE REAL IF STATEMENTS, DON'T JUST CHAIN ACTIONS:
+- The If block exists and is reliable — use it every time the request implies
+  a condition, choice, or check. A build with NO if statements almost always
+  means missing logic, not simpler logic. Use If for:
+  * Currency/requirement checks before an action: if gold.Value >= price then
+    ... else ... end (deduct only inside the true branch).
+  * Toggle/state checks: if door.Transparency == 0 then (close it) else (open
+    it) end — never just always set the same value every click.
+  * Existence/validity checks: if character and character:FindFirstChild
+    ("Humanoid") then ... end before touching a player's Humanoid.
+  * Win/lose/threshold checks: if humanoid.Health <= 0 then ... end.
+- Nest if/elseif/else exactly as you would in normal Luau — the encoder
+  supports if nested inside .Touched/.MouseClick/loops and vice versa. Every
+  if needs its own end; check this in the CORRECTNESS SELF-CHECK pass.
+
+WAITFORCHILD / OBJECT REFERENCE DISCIPLINE (fixes broken shop/interaction bugs):
+- The MOMENT you fetch an object with WaitForChild or FindFirstChild into a
+  local variable, that variable IS the object from then on. Every later line
+  that needs that object must use the VARIABLE — never re-type the dotted
+  path or the child's name again.
+  * WRONG: local shop = workspace:WaitForChild("Shop")
+           local door = workspace.Shop:WaitForChild("ShopDoor")  -- re-walks the path
+  * RIGHT: local shop = workspace:WaitForChild("Shop")
+           local door = shop:WaitForChild("ShopDoor")  -- reuses the variable
+- Chain WaitForChild calls top-down, one parent-to-child hop per line, always
+  off the previous result: local a = workspace:WaitForChild("Shop"); local b =
+  a:WaitForChild("ShopDoor"); local c = b:WaitForChild("ClickDetector").
+- WaitForChild YIELDS until the child exists — use it for anything that might
+  not have replicated/loaded yet (a part from the Model Script, a player's
+  leaderstats). FindFirstChild returns nil immediately if missing — only use
+  it when you deliberately want to check "does this exist right now" inside
+  an if, and always guard the result: local x = obj:FindFirstChild("Y"); if x
+  then ... end. Never assume a FindFirstChild result is non-nil.
+
+CLICKDETECTOR & REMOTEEVENT — ONLY WHEN THE INTERACTION ACTUALLY NEEDS THEM:
+- ClickDetector goes on exactly the ONE Part the user is meant to click to
+  trigger the action (a shop counter, a door, a lever) — never add it to an
+  unrelated part, and never add it "just in case" to a script whose job was
+  something else (e.g. a script that only creates a RemoteEvent has no reason
+  to also create a ClickDetector unless that same script's job is the click
+  interaction itself).
+- RemoteEvent is ONLY for client -> server communication that needs SERVER
+  validation (spending currency, giving items) — create exactly ONE
+  RemoteEvent per distinct action, Instance.new("RemoteEvent") parented to
+  ReplicatedStorage, in the Main Script. Fire it from the client (LocalScript/
+  GUI button or ClickDetector) with :FireServer(...), and handle it ONCE on
+  the server with .OnServerEvent:Connect(function(player, ...) ... end) —
+  never create more than one RemoteEvent for the same single action, and
+  never fire one without a matching OnServerEvent handler (or vice versa).
+- WORKED PURCHASE FLOW (the standard shop pattern — adapt names/price):
+  Main Script (server): create RemoteEvent "BuyItem" in ReplicatedStorage;
+  find the counter Part (WaitForChild, reused as a variable); add a
+  ClickDetector to it; on ClickDetector.MouseClick(player), fire nothing yet
+  — instead have the click open a confirm GUI OR directly:
+    clickDetector.MouseClick:Connect(function(player)
+      local gold = player:WaitForChild("leaderstats"):WaitForChild("Gold")
+      if gold.Value >= price then
+        gold.Value = gold.Value - price
+        print("Bought item")
+      else
+        print("Not enough gold")
+      end
+    end)
+  This keeps the currency check server-side with a real if — no RemoteEvent
+  is even needed for a same-script click-to-buy. Only add a RemoteEvent if a
+  GUI button (which runs on the client) needs to trigger the same purchase —
+  then the GUI LocalScript fires BuyItem:FireServer(), and this same if-based
+  check moves inside .OnServerEvent:Connect(function(player) ... end).
+
 SMALL OBJECTS / TOOLS / HANDHELD ITEMS — get the SHAPE right, not just the color:
 - A real-world object's proportions must be reflected in the Part Size, not just
   its name/BrickColor. The single most common failure: making every object a
